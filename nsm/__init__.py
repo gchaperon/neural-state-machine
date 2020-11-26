@@ -1,37 +1,29 @@
 #!/usr/bin/env python
 import argparse
-from pathlib import Path
-from functools import cached_property
 import json
-from nsm.utils import Config
+import sys
+from functools import cached_property
+from pathlib import Path
 from typing import List, Optional
+
 import ijson
+import torch
+import torch.nn as nn
+from pydantic import ValidationError
 
-
-class GQAVocab:
-    def __init__(self, args):
-        self.gqa_scene_graphs_dir = args.data_dir / "GQA" / "sceneGraphs"
-        self.vg_dir = args.data_dir / "VG_v1.v"
-
-    @cached_property
-    def _all_object_names(self):
-        scene_graphs_train_file = self.gqa_scene_graphs_dir / "train_sceneGraphs.json"
-        with scene_graphs_train_file.open() as f:
-            return {
-                obj["name"]
-                for scene_graph in json.load(f).values()
-                for obj in scene_graph["objects"].values()
-            }
-
-    @cached_property
-    def object_names(self):
-        pass
+from nsm.utils import Config
 
 
 def parse_args(args: Optional[List[str]] = None) -> Config:
     parser = argparse.ArgumentParser("Train some models.")
     parser.add_argument("--data-dir", default="data", type=Path)
-    config = Config(**vars(parser.parse_args(args)))  # type: ignore
+    parser.add_argument("--embedding-size", default=300, type=int)
+    try:
+        config = Config(**vars(parser.parse_args(args)))  # type: ignore
+    except ValidationError as e:
+        print(e)
+        sys.exit(1)
+
     return config
 
 
@@ -54,7 +46,7 @@ def get_objects():
 
 def main(args: Optional[List[str]] = None) -> None:
     config = parse_args(args)
-    objects = get_objects()
+    # objects = get_objects()
     breakpoint()
 
 
