@@ -1,5 +1,6 @@
 import random
 import unittest
+import warnings
 
 import torch
 from torch.nn.utils.rnn import PackedSequence, pack_sequence
@@ -10,6 +11,8 @@ from nsm.model import (
     NormalizeWordsModel,
     NSMCell,
 )
+
+warnings.filterwarnings("ignore", category=UserWarning)
 
 
 class TestQuestionNormalization(unittest.TestCase):
