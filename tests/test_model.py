@@ -2,12 +2,13 @@ import random
 import unittest
 
 import torch
-from torch.nn.utils.rnn import pack_sequence, PackedSequence
+from torch.nn.utils.rnn import PackedSequence, pack_sequence
 
 from nsm.model import (
-    NormalizeWordsModel,
     InstructionsDecoder,
     InstructionsModel,
+    NormalizeWordsModel,
+    NSMCell,
 )
 
 
@@ -70,3 +71,12 @@ class TestInstructionsModel(unittest.TestCase):
             output.shape, (len(self.questions), self.n_instructions, 300)
         )
         self.assertFalse(output.isnan().any())
+
+
+class TestNSMCell(unittest.TestCase):
+    def setUp(self):
+        self.model = NSMCell()
+        # my batch structure is just every prob distribution concatenated
+
+    def test_output_shape(self):
+        pass

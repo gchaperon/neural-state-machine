@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.nn.utils.rnn import PackedSequence, pad_packed_sequence
 
 
@@ -15,7 +16,7 @@ class NormalizeWordsModel(nn.Module):
         # input should be PackedSequence
         words, *rest = input
         C = torch.cat((self.vocab.T, self.default_embed.view(-1, 1)), dim=1)
-        P = torch.softmax(words @ self.W @ C, dim=1)
+        P = F.softmax(words @ self.W @ C, dim=1)
         V = P[:, -1:] * words + P[:, :-1] @ self.vocab
         return PackedSequence(V, *rest)
 
@@ -55,7 +56,6 @@ class InstructionsModel(nn.Module):
         V, lens_unpacked = pad_packed_sequence(V, batch_first=True)
         # Prepare mask for attention
         seq_len = V.size(1)
-
         mask = (
             torch.cat(
                 [
@@ -66,7 +66,15 @@ class InstructionsModel(nn.Module):
             torch.arange(self.n_instructions)[:, None],
             torch.cat([torch.arange(l, seq_len) for l in lens_unpacked]),
         )
+        # Intermediate multiplication
         tmp = H @ V.transpose(1, 2)
+        # Mask values for softmax
         tmp[mask] = float("-inf")
-        R = torch.softmax(tmp, dim=-1) @ V
+        # Instructions
+        R = F.softmax(tmp, dim=-1) @ V
         return R
+
+
+class NSMCell(nn.Module):
+    def __init__(self):
+        super(NSMCell, self).__init__()

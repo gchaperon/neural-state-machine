@@ -6,7 +6,6 @@ from functools import cached_property
 from pathlib import Path
 from typing import List, Optional
 
-import ijson
 import torch
 import torch.nn as nn
 from pydantic import ValidationError
