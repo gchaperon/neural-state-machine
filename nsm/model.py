@@ -8,8 +8,8 @@ class NormalizeWordsModel(nn.Module):
     def __init__(self, vocab):
         super(NormalizeWordsModel, self).__init__()
 
-        self.vocab = vocab
-        self.default_embed = torch.rand(300)
+        self.vocab = nn.Parameter(vocab, requires_grad=False)
+        self.default_embed = nn.Parameter(torch.rand(300))
         self.W = nn.Parameter(torch.eye(300))
 
     def forward(self, input):

@@ -32,11 +32,20 @@ class TestQuestionNormalization(unittest.TestCase):
         output = self.model(self.input)
         self.assertEqual(output.data.shape, self.input.data.shape)
 
+    @unittest.skipIf(not torch.cuda.is_available(), "cuda is not available")
+    def test_output_cuda(self):
+        model = self.model.cuda()
+        output = model(self.input.to("cuda"))
+        self.assertTrue(output.is_cuda)
+
 
 class TestInstructionsDecoder(unittest.TestCase):
     def setUp(self):
         self.n_instructions = 8
+        self.batch_size = 64
         self.hidden_size = 300
+        # for each question in the batch there is a vector representing it
+        self.input = torch.rand(self.batch_size, self.hidden_size)
         self.model = InstructionsDecoder(
             n_instructions=self.n_instructions,
             input_size=self.hidden_size,
@@ -44,14 +53,22 @@ class TestInstructionsDecoder(unittest.TestCase):
             nonlinearity="relu",
         )
 
+    def test_output_type(self):
+        output = self.model(self.input)
+        self.assertIsInstance(output, torch.Tensor)
+
     def test_hidden_states(self):
-        # for each question in the batch there is a vector representing it
-        batch_size = 64
-        input = torch.rand(batch_size, self.hidden_size)
-        output = self.model(input)
+        output = self.model(self.input)
         self.assertEqual(
-            output.shape, (batch_size, self.n_instructions, self.hidden_size)
+            output.shape,
+            (self.batch_size, self.n_instructions, self.hidden_size),
         )
+
+    @unittest.skipIf(not torch.cuda.is_available(), "cuda is not available")
+    def test_output_cuda(self):
+        model = self.model.cuda()
+        output = model(self.input.cuda())
+        self.assertTrue(output.is_cuda)
 
 
 class TestInstructionsModel(unittest.TestCase):
@@ -62,15 +79,26 @@ class TestInstructionsModel(unittest.TestCase):
         self.questions = [
             torch.rand(random.randint(10, 20), 300) for _ in range(64)
         ]
+        self.input = pack_sequence(
+            sorted(self.questions, key=len, reverse=True)
+        )
+
+    def test_output_type(self):
+        output = self.model(self.input)
+        self.assertIsInstance(output, torch.Tensor)
 
     def test_output_shape(self):
-        input = pack_sequence(sorted(self.questions, key=len, reverse=True))
-        output = self.model(input)
-        self.assertIsInstance(output, torch.Tensor)
+        output = self.model(self.input)
         self.assertEqual(
             output.shape, (len(self.questions), self.n_instructions, 300)
         )
         self.assertFalse(output.isnan().any())
+
+    @unittest.skipIf(not torch.cuda.is_available(), "cuda is not available")
+    def test_output_cuda(self):
+        model = self.model.cuda()
+        output = model(self.input.to("cuda"))
+        self.assertTrue(output.is_cuda)
 
 
 class TestNSMCell(unittest.TestCase):
