@@ -201,6 +201,6 @@ class CollateGraphs(unittest.TestCase):
     def test_collate_cuda(self) -> None:
         graphs = list(islice(self.graph_gen, 8))
         batch = collate_graphs(graphs, device="cuda")
-        for key, val in vars(batch):
+        for key, val in vars(batch).items():
             with self.subTest(attr=key):
                 self.assertTrue(val.is_cuda)
