@@ -104,6 +104,7 @@ class TestInstructionsModel(unittest.TestCase):
         self.assertTrue(output.is_cuda)
 
 
+@unittest.skip("wip")
 class TestNSMCell(unittest.TestCase):
     def setUp(self):
         self.model = NSMCell()

@@ -4,7 +4,7 @@ import json
 import math
 import random
 from collections import defaultdict
-from functools import wraps
+from functools import wraps, cached_property
 from operator import eq
 from pathlib import Path
 from typing import (
@@ -18,6 +18,7 @@ from typing import (
     NamedTuple,
     Set,
     Tuple,
+    Union,
 )
 
 import pydantic
@@ -30,11 +31,22 @@ class Config:
     embedding_size: Literal[50, 100, 200, 300]
 
 
-# @dataclasses.dataclass
-class Graph(NamedTuple):
+@dataclasses.dataclass
+class Graph:
     node_attrs: torch.Tensor
     edge_index: torch.Tensor
     edge_attrs: torch.Tensor
+
+
+@dataclasses.dataclass
+class Batch(Graph):
+    nodes_per_graph: torch.Tensor
+
+    @cached_property
+    def node_indices(self):
+        return torch.arange(
+            nodes_per_graph.size(0), device=nodes_per_graph.device
+        ).repear_interleave(nodes_per_graph)
 
 
 # TODO: terminar esta funcioncita
@@ -100,3 +112,32 @@ def infinite_graphs(
         edge_attrs = torch.rand(n_edges, hidden_size)
 
         yield Graph(node_attrs, edge_index, edge_attrs)
+
+
+def collate_graphs(
+    batch: List[Graph], device: Union[str, torch.device] = "cpu"
+) -> Batch:
+    nodes_per_graph = torch.tensor(
+        [graph.node_attrs.size(0) for graph in batch]
+    )
+    node_attrs = torch.cat([graph.node_attrs for graph in batch])
+    edge_attrs = torch.cat([graph.edge_attrs for graph in batch])
+    edge_indices = torch.cat(
+        [
+            graph.edge_index + shift
+            for graph, shift in zip(
+                batch, [0, *nodes_per_graph.cumsum(0).tolist()]
+            )
+        ],
+        dim=1,
+    )
+    return Batch(
+        node_attrs.to(device),
+        edge_indices.to(device),
+        edge_attrs.to(device),
+        nodes_per_graph.to(device),
+    )
+
+
+def index_softmax(src, index):
+    pass
