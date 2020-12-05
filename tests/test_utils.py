@@ -34,7 +34,7 @@ class InfiniteGraphs(unittest.TestCase):
     def test_graph_tensors_ndims(self) -> None:
         g = next(self.graph_gen)
         self.assertEqual(len(g.node_attrs.size()), 3)
-        self.assertEqual(len(g.edge_index.size()), 2)
+        self.assertEqual(len(g.edge_indices.size()), 2)
         self.assertEqual(len(g.edge_attrs.size()), 2)
 
     def test_nodes_shape(self) -> None:
@@ -43,9 +43,9 @@ class InfiniteGraphs(unittest.TestCase):
         self.assertEqual(n_properties, self.n_properties)
         self.assertEqual(hidden_size, self.hidden_size)
 
-    def test_edge_index_shape(self) -> None:
+    def test_edge_indices_shape(self) -> None:
         g = next(self.graph_gen)
-        should_be_2, *rest = g.edge_index.size()
+        should_be_2, *rest = g.edge_indices.size()
         self.assertEqual(should_be_2, 2)
 
     def test_edge_attrs_shape(self) -> None:
@@ -55,12 +55,12 @@ class InfiniteGraphs(unittest.TestCase):
 
     def test_edge_tensors_dim_match(self) -> None:
         g = next(self.graph_gen)
-        self.assertEqual(g.edge_index.size(1), g.edge_attrs.size(0))
+        self.assertEqual(g.edge_indices.size(1), g.edge_attrs.size(0))
 
     def test_valid_index(self) -> None:
         g = next(self.graph_gen)
         n_nodes = g.node_attrs.size(0)
-        self.assertTrue(g.edge_index.lt(n_nodes).all())
+        self.assertTrue(g.edge_indices.lt(n_nodes).all())
 
     def test_generate_many(self) -> None:
         n = 20
@@ -162,7 +162,7 @@ class CollateGraphs(unittest.TestCase):
                     batch.edge_attrs.size(), (total_edges, self.hidden_size)
                 )
             with self.subTest("edge_indices"):
-                self.assertEqual(batch.edge_index.size(), (2, total_edges))
+                self.assertEqual(batch.edge_indices.size(), (2, total_edges))
         with self.subTest("nodes_per_graph"):
             self.assertEqual(batch.nodes_per_graph.size(0), batch_size)
         # with self.subTest("edges_per_graph"):
@@ -175,7 +175,7 @@ class CollateGraphs(unittest.TestCase):
         self.assertEqual(batch.nodes_per_graph.tolist(), nodes_per_graph)
         self.assertEqual(batch.node_attrs.size(0), sum(nodes_per_graph))
 
-    def test_edge_index_shift_edge_attrs(self) -> None:
+    def test_edge_indices_shift_edge_attrs(self) -> None:
         graphs = list(islice(self.graph_gen, 8))
         batch = collate_graphs(graphs)
         for _ in range(5):
@@ -185,13 +185,13 @@ class CollateGraphs(unittest.TestCase):
             node_idx = random.randrange(graph.node_attrs.size(0))
             # breakpoint()
             correct_edge_attrs = graph.edge_attrs[
-                graph.edge_index[0] == node_idx
+                graph.edge_indices[0] == node_idx
             ]
             new_node_idx = (
                 sum(batch.nodes_per_graph.tolist()[:g_idx]) + node_idx
             )
             new_edge_attrs = batch.edge_attrs[
-                batch.edge_index[0] == new_node_idx
+                batch.edge_indices[0] == new_node_idx
             ]
             # breakpoint()
             self.assertEqual(new_edge_attrs.size(), correct_edge_attrs.size())
@@ -204,3 +204,33 @@ class CollateGraphs(unittest.TestCase):
         for key, val in vars(batch).items():
             with self.subTest(attr=key):
                 self.assertTrue(val.is_cuda)
+
+
+class BatchTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        graph_gen = infinite_graphs(
+            300,
+            77,
+            node_distribution=(16.4, 8.2),
+            density_distribution=(0.2, 0.4),
+        )
+        self.batch = collate_graphs(list(islice(graph_gen, 8)))
+
+    def test_node_indices_shape(self) -> None:
+        self.assertEqual(
+            self.batch.node_indices.size(), (self.batch.node_attrs.size(0),)
+        )
+
+    def test_sparse_coo_indices(self) -> None:
+        self.assertEqual(
+            self.batch.sparse_coo_indices.size(),
+            (2, self.batch.node_attrs.size(0)),
+        )
+
+    @unittest.skipIf(not torch.cuda.is_available(), "cuda is not available")
+    def test_properties_cuda(self) -> None:
+        batch = Batch(*map(torch.Tensor.cuda, vars(self.batch).values()))
+        props = ["node_indices", "sparse_coo_indices"]
+        for prop in props:
+            with self.subTest(property=prop):
+                self.assertTrue(getattr(batch, prop).is_cuda)

@@ -34,7 +34,7 @@ class Config:
 @dataclasses.dataclass
 class Graph:
     node_attrs: torch.Tensor
-    edge_index: torch.Tensor
+    edge_indices: torch.Tensor
     edge_attrs: torch.Tensor
 
 
@@ -42,23 +42,28 @@ class Graph:
 class Batch(Graph):
     nodes_per_graph: torch.Tensor
 
-    @cached_property
-    def node_indices(self):
+    @property
+    def node_indices(self) -> torch.Tensor:
         return torch.arange(
-            nodes_per_graph.size(0), device=nodes_per_graph.device
-        ).repear_interleave(nodes_per_graph)
+            self.nodes_per_graph.size(0), device=self.nodes_per_graph.device
+        ).repeat_interleave(self.nodes_per_graph)
+
+    @property
+    def sparse_coo_indices(self) -> torch.Tensor:
+        device = self.nodes_per_graph.device
+        catenated_ranges = torch.cat(
+            [torch.arange(n, device=device) for n in self.nodes_per_graph]
+        )
+        indices = torch.vstack((self.node_indices, catenated_ranges))
+        return indices
 
 
 # TODO: terminar esta funcioncita
-def disk_cache(file_name: str) -> Any:
-    def deco(f):
-        @wraps(f)
-        def wrapper(*args, **kwargs):
-            pass
-
-
-def check_conectivity_temp(fp):
-    imgs = json.load(fp)
+# def disk_cache(file_name: str) -> Any:
+#    def deco(f):
+#        @wraps(f)
+#        def wrapper(*args, **kwargs):
+#            pass
 
 
 def is_connected(
@@ -124,7 +129,7 @@ def collate_graphs(
     edge_attrs = torch.cat([graph.edge_attrs for graph in batch])
     edge_indices = torch.cat(
         [
-            graph.edge_index + shift
+            graph.edge_indices + shift
             for graph, shift in zip(
                 batch, [0, *nodes_per_graph.cumsum(0).tolist()]
             )
@@ -137,7 +142,3 @@ def collate_graphs(
         edge_attrs.to(device),
         nodes_per_graph.to(device),
     )
-
-
-def index_softmax(src, index):
-    pass
