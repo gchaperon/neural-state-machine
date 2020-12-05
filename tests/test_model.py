@@ -134,14 +134,14 @@ class TestNSMCell(unittest.TestCase):
         self.assertEqual(output.size(0), input.node_attrs.size(0))
 
     @unittest.skipIf(not torch.cuda.is_available(), "cuda is not available")
-    def test_output_shape_gpu(self) -> None:
+    def test_output_shape_cuda(self) -> None:
         device = torch.device("cuda")
         model = self.model.to(device)
         input = collate_graphs(self.graph_list, device=device)
         output = self.model(
             input, self.instruction.to(device), self.prop_embeds.to(device)
         )
-        self.assertEqual(output.device, device)
+        self.assertEqual(output.device.type, device.type)
 
     def test_grad_init_is_none(self) -> None:
         # Maybe add subtests
