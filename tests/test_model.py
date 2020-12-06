@@ -108,6 +108,7 @@ class TestInstructionsModel(unittest.TestCase):
 
 class TestNSMCell(unittest.TestCase):
     def setUp(self) -> None:
+        self.batch_size = 10
         self.hidden_size = 300
         self.n_properties = 77
         # NOTE: Plus one to account for the relations
@@ -120,7 +121,7 @@ class TestNSMCell(unittest.TestCase):
                     node_distribution=(16.4, 8.2),
                     density_distribution=(0.2, 0.4),
                 ),
-                10,
+                self.batch_size,
             )
         )
         self.instruction = torch.rand(self.hidden_size)
@@ -142,6 +143,15 @@ class TestNSMCell(unittest.TestCase):
             input, self.instruction.to(device), self.prop_embeds.to(device)
         )
         self.assertEqual(output.device.type, device.type)
+
+    def test_output_sum_one_per_graph(self) -> None:
+        input = collate_graphs(self.graph_list)
+        output = self.model(input, self.instruction, self.prop_embeds)
+        self.assertTrue(
+            torch.zeros(self.batch_size)
+            .index_add_(0, input.node_indices, output)
+            .allclose(torch.ones(self.batch_size))
+        )
 
     def test_grad_init_is_none(self) -> None:
         # Maybe add subtests
