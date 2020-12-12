@@ -23,12 +23,13 @@ from typing import (
     Sequence,
     Callable,
 )
+import math
 
 import pydantic
 import torch
 
 
-@pydantic.dataclasses.dataclass
+@pydantic.dataclasses.dataclass(frozen=True)
 class Config:
     data_dir: Path
     embedding_size: Literal[50, 100, 200, 300]
@@ -187,6 +188,28 @@ def broadcast_size(s1: Sequence[int], s2: Sequence[int]) -> Sequence[int]:
 
     # fuckit
     return type(s1)(reversed(out))  # type:ignore
+
+
+def matmul_memcapped(
+    parameter: torch.Tensor, nodes: torch.Tensor, *, memory_cap: int
+) -> torch.Tensor:
+    """
+    This is super specific for my use case
+    Memory cap in bytes
+    Hard to test this one
+    """
+    assert nodes.dtype == parameter.dtype
+    # Get split size
+    chunks = math.ceil(
+        parameter.numel()
+        * nodes.size(0)
+        * parameter.element_size()
+        / memory_cap
+    )
+    #if chunks == 1: print("no chunking needed", end="")
+    return torch.cat(
+        [parameter @ T for T in nodes.chunk(chunks, dim=0)], dim=0
+    )
 
 
 def matmul_split_size(

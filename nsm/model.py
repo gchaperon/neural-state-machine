@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import PackedSequence, pad_packed_sequence
-from nsm.utils import Batch
+from nsm.utils import Batch, matmul_memcapped
 
 from typing import Optional, List, Union, Tuple
 
@@ -121,9 +121,12 @@ class NSMCell(nn.Module):
             torch.sum(
                 prop_similarities[batch.node_indices, :-1, None]
                 * instruction[batch.node_indices, None]
-                * self.Ws_property[:-1]
-                .matmul(batch.node_attrs.unsqueeze(-1))
-                .squeeze(),
+                * matmul_memcapped(
+                    self.Ws_property[:-1],
+                    batch.node_attrs.unsqueeze(-1),
+                    # 8 gigs memory cap
+                    memory_cap=5 * 10 ** 9,
+                ).squeeze(),
                 dim=1,
             )
         )
@@ -209,6 +212,7 @@ class NSM(nn.Module):
                 graph_batch, instruction, distribution
             )
 
+        # breakpoint()
         aggregated: torch.Tensor = torch.zeros_like(
             encoded_questions
         ).index_add_(
@@ -216,7 +220,9 @@ class NSM(nn.Module):
             graph_batch.node_indices,
             distribution[:, None]
             * torch.sum(
-                prop_similarities[:-1, None] * graph_batch.node_attrs, dim=1
+                prop_similarities[graph_batch.node_indices, :-1, None]
+                * graph_batch.node_attrs,
+                dim=1,
             ),
         )
         return self.linear(torch.hstack((encoded_questions, aggregated)))

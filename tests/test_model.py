@@ -1,3 +1,4 @@
+import os 
 import random
 import unittest
 import warnings
@@ -119,7 +120,7 @@ class TestInstructionsModel(unittest.TestCase):
         model = self.model.cuda()
         instructions, encoded = model(self.input.to("cuda"))
         self.assertTrue(instructions.is_cuda)
-        self.assertTrue(encoded.is_cude)
+        self.assertTrue(encoded.is_cuda)
 
 
 class TestNSMCell(unittest.TestCase):
@@ -209,21 +210,73 @@ class TestNSMCell(unittest.TestCase):
             )
             output.sum().backward()
             for param in self.model.parameters():
-                self.assertIsNotNone(param.grad)
+                if param.requires_grad:
+                    self.assertIsNotNone(param.grad)
 
 
-@unittest.skip("wip")
+# @unittest.skip("wip")
 class TestNSM(unittest.TestCase):
-    def setUpt(self) -> None:
-        self.n_properties = 77
+    def setUp(self) -> None:
+        # These tests should be unsing expected dimensions
+        self.n_properties = 78
         self.hidden_size = 300
         self.computation_steps = 8
+        self.batch_size = 64
         self.vocab = torch.rand(1335, self.hidden_size)
         self.prop_embeds = torch.rand(self.n_properties, self.hidden_size)
+        self.output_size = 2000
         self.model = NSM(
-            self.vocab, self.prop_embeds, self.computation_steps, 2000
+            self.vocab,
+            self.prop_embeds,
+            self.computation_steps,
+            self.output_size,
         )
-
+        self.graph_batch = collate_graphs(
+            list(
+                islice(
+                    infinite_graphs(
+                        self.hidden_size,
+                        self.n_properties - 1,
+                        node_distribution=(16.4, 8.2),
+                        density_distribution=(0.2, 0.4),
+                    ),
+                    self.batch_size,
+                )
+            )
+        )
+        self.question_batch = pack_sequence(
+            sorted(
+                [
+                    torch.rand(random.randint(10, 20), self.hidden_size)
+                    for _ in range(self.batch_size)
+                ],
+                key=len,
+                reverse=True,
+            )
+        )
+    @unittest.skipIf(os.environ.get("SKIP_LONGASS_CPU_TESTS"), "skipping long cpu tests")
     def test_output_shape(self) -> None:
+        output = self.model(self.graph_batch, self.question_batch)
+        self.assertEqual(output.shape, (self.batch_size, self.output_size))
 
-        pass
+    @unittest.skipIf(not torch.cuda.is_available(), "cuda not available")
+    def test_output_shape_cuda(self) -> None:
+        device = torch.device("cuda")
+        model = self.model.to(device)
+        output = model(
+            self.graph_batch.to(device), self.question_batch.to(device)
+        )
+        self.assertEqual(output.device.type, device.type)
+        self.assertEqual(output.shape, (self.batch_size, self.output_size))
+
+    @unittest.skipIf(not torch.cuda.is_available(), "cuda not available")
+    def test_backward_Cuda(self) ->None:
+        warnings.simplefilter("ignore", category=UserWarning)
+        with torch.autograd.detect_anomaly():
+            device = torch.device("cuda")
+            model = self.model.to(device)
+            output = model(self.graph_batch.to(device), self.question_batch.to(device))
+            output.sum().backward()
+            for param in model.parameters():
+                if param.requires_grad:
+                    self.assertIsNotNone(param.grad)
