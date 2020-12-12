@@ -1,5 +1,5 @@
 import dataclasses
-import itertools
+from itertools import zip_longest
 import json
 import math
 import random
@@ -19,6 +19,9 @@ from typing import (
     Set,
     Tuple,
     Union,
+    TypeVar,
+    Sequence,
+    Callable,
 )
 
 import pydantic
@@ -31,22 +34,34 @@ class Config:
     embedding_size: Literal[50, 100, 200, 300]
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class Graph:
     node_attrs: torch.Tensor
     edge_indices: torch.Tensor
     edge_attrs: torch.Tensor
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class Batch(Graph):
     nodes_per_graph: torch.Tensor
+    edges_per_graph: torch.Tensor
 
     @property
     def node_indices(self) -> torch.Tensor:
+        return self._get_batch_indices_from_items_per_graph(
+            self.nodes_per_graph
+        )
+
+    @property
+    def edge_batch_indices(self) -> torch.Tensor:
+        return self._get_batch_indices_from_items_per_graph(
+            self.edges_per_graph
+        )
+
+    def _get_batch_indices_from_items_per_graph(self, tensor):
         return torch.arange(
-            self.nodes_per_graph.size(0), device=self.nodes_per_graph.device
-        ).repeat_interleave(self.nodes_per_graph)
+            tensor.size(0), device=tensor.device
+        ).repeat_interleave(tensor)
 
     @property
     def sparse_coo_indices(self) -> torch.Tensor:
@@ -56,6 +71,16 @@ class Batch(Graph):
         )
         indices = torch.vstack((self.node_indices, catenated_ranges))
         return indices
+
+    def to(self, *args, **kwargs) -> "Batch":
+        return Batch(*[T.to(*args, **kwargs) for T in vars(self).values()])
+
+    def __repr__(self) -> str:
+        """ This is really informal, just for debuggin purposes """
+        return "Batch:\n" + "\n".join(
+            f"    {name}: {'x'.join(map(str, T.size()))}"
+            for name, T in vars(self).items()
+        )
 
 
 # TODO: terminar esta funcioncita
@@ -125,6 +150,9 @@ def collate_graphs(
     nodes_per_graph = torch.tensor(
         [graph.node_attrs.size(0) for graph in batch]
     )
+    edges_per_graph = torch.tensor(
+        [graph.edge_attrs.size(0) for graph in batch]
+    )
     node_attrs = torch.cat([graph.node_attrs for graph in batch])
     edge_attrs = torch.cat([graph.edge_attrs for graph in batch])
     edge_indices = torch.cat(
@@ -141,4 +169,27 @@ def collate_graphs(
         edge_indices.to(device),
         edge_attrs.to(device),
         nodes_per_graph.to(device),
+        edges_per_graph.to(device),
     )
+
+
+def broadcast_size(s1: Sequence[int], s2: Sequence[int]) -> Sequence[int]:
+    assert (
+        len(s1) > 0 and len(s2) > 0
+    ), "Each tensor must have at least one dimension"
+
+    out: List[int] = []
+    for d1, d2 in zip_longest(reversed(s1), reversed(s2), fillvalue=1):
+        assert d1 == d2 or any(
+            d == 1 for d in (d1, d2)
+        ), "Dimensions must be either equal or one of them is one"
+        out.append(max(d1, d2))
+
+    # fuckit
+    return type(s1)(reversed(out))  # type:ignore
+
+
+def matmul_split_size(
+    t1: torch.Tensor, t2: torch.Tensor, max_memory: int = 10
+):
+    pass

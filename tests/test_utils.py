@@ -234,3 +234,8 @@ class BatchTestCase(unittest.TestCase):
         for prop in props:
             with self.subTest(property=prop):
                 self.assertTrue(getattr(batch, prop).is_cuda)
+
+    @unittest.skipIf(not torch.cuda.is_available(), "cuda is not available")
+    def test_to(self) -> None:
+        batch = self.batch.to("cuda")
+        self.assertTrue(all(t.is_cuda for t in vars(batch).values()))

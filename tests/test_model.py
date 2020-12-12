@@ -11,6 +11,7 @@ from nsm.model import (
     InstructionsModel,
     NormalizeWordsModel,
     NSMCell,
+    NSM,
 )
 
 from nsm.utils import collate_graphs, infinite_graphs
@@ -20,15 +21,22 @@ warnings.simplefilter("ignore", category=UserWarning)
 
 class TestQuestionNormalization(unittest.TestCase):
     def setUp(self) -> None:
-        self.vocab = torch.rand(1335, 300)
+        self.hidden_size = 300
+        self.vocab_size = 1335
+        self.vocab = torch.rand(self.vocab_size, self.hidden_size)
+        self.model = NormalizeWordsModel(self.vocab)
+        self.batch_size = 64
+        # batch of questions, lengths between 10 and 20
         self.input = pack_sequence(
             sorted(
-                [torch.rand(random.randint(10, 20), 300) for i in range(64)],
+                [
+                    torch.rand(random.randint(10, 20), self.hidden_size)
+                    for i in range(self.batch_size)
+                ],
                 key=len,
                 reverse=True,
             )
         )
-        self.model = NormalizeWordsModel(self.vocab)
 
     def test_output_type(self) -> None:
         output = self.model(self.input)
@@ -79,10 +87,13 @@ class TestInstructionsDecoder(unittest.TestCase):
 class TestInstructionsModel(unittest.TestCase):
     def setUp(self) -> None:
         self.n_instructions = 8
-        self.vocab = torch.rand(1335, 300)
+        self.hidden_size = 300
+        self.batch_size = 64
+        self.vocab = torch.rand(1335, self.hidden_size)
         self.model = InstructionsModel(self.vocab, self.n_instructions)
         self.questions = [
-            torch.rand(random.randint(10, 20), 300) for _ in range(64)
+            torch.rand(random.randint(10, 20), self.hidden_size)
+            for _ in range(self.batch_size)
         ]
         self.input = pack_sequence(
             sorted(self.questions, key=len, reverse=True)
@@ -90,29 +101,35 @@ class TestInstructionsModel(unittest.TestCase):
 
     def test_output_type(self) -> None:
         output = self.model(self.input)
-        self.assertIsInstance(output, torch.Tensor)
+        self.assertIsInstance(output, tuple)
+        self.assertIsInstance(output[0], torch.Tensor)
+        self.assertIsInstance(output[1], torch.Tensor)
 
     def test_output_shape(self) -> None:
-        output = self.model(self.input)
+        instructions, encoded = self.model(self.input)
         self.assertEqual(
-            output.shape, (len(self.questions), self.n_instructions, 300)
+            instructions.size(),
+            (self.batch_size, self.n_instructions, self.hidden_size),
         )
-        self.assertFalse(output.isnan().any())
+        self.assertFalse(instructions.isnan().any())
+        self.assertEqual(encoded.size(), (self.batch_size, self.hidden_size))
 
     @unittest.skipIf(not torch.cuda.is_available(), "cuda is not available")
     def test_output_cuda(self) -> None:
         model = self.model.cuda()
-        output = model(self.input.to("cuda"))
-        self.assertTrue(output.is_cuda)
+        instructions, encoded = model(self.input.to("cuda"))
+        self.assertTrue(instructions.is_cuda)
+        self.assertTrue(encoded.is_cude)
 
 
 class TestNSMCell(unittest.TestCase):
     def setUp(self) -> None:
-        self.batch_size = 10
-        self.hidden_size = 300
-        self.n_properties = 77
-        # NOTE: Plus one to account for the relations
-        self.model = NSMCell(self.hidden_size, self.n_properties + 1)
+        self.batch_size = 8
+        self.hidden_size = 100
+        self.n_properties = 20
+        # NOTE: plus one to account for the relations
+        self.prop_embeds = torch.rand(self.n_properties + 1, self.hidden_size)
+        self.model = NSMCell(self.prop_embeds)
         self.graph_list = list(
             islice(
                 infinite_graphs(
@@ -124,62 +141,89 @@ class TestNSMCell(unittest.TestCase):
                 self.batch_size,
             )
         )
-        self.instruction = torch.rand(self.hidden_size)
-        # NOTE: plus one to account for the relations
-        self.prop_embeds = torch.rand(self.n_properties + 1, self.hidden_size)
+        self.input = collate_graphs(self.graph_list)
+        self.instruction = torch.rand(self.batch_size, self.hidden_size)
+        # for testing purposes it doesn't matter that the probs sum to
+        # one per graph
+        self.distribution = torch.rand(self.input.node_attrs.size(0))
 
     def test_output_shape(self) -> None:
-        input = collate_graphs(self.graph_list)
-        output = self.model(input, self.instruction, self.prop_embeds)
-        self.assertEqual(output.ndim, 1)
-        self.assertEqual(output.size(0), input.node_attrs.size(0))
+        distribution, prop_similarities = self.model(
+            self.input, self.instruction, self.distribution
+        )
+        self.assertEqual(distribution.ndim, 1)
+        self.assertEqual(prop_similarities.ndim, 2)
+        self.assertEqual(distribution.size(0), self.input.node_attrs.size(0))
+        self.assertEqual(
+            prop_similarities.size(),
+            (self.batch_size, self.prop_embeds.size(0)),
+        )
 
     @unittest.skipIf(not torch.cuda.is_available(), "cuda is not available")
     def test_output_shape_cuda(self) -> None:
         device = torch.device("cuda")
         model = self.model.to(device)
-        input = collate_graphs(self.graph_list, device=device)
-        output = self.model(
-            input, self.instruction.to(device), self.prop_embeds.to(device)
+        input = self.input.to(device)
+        distribution, prop_similarities = self.model(
+            input, self.instruction.to(device), self.distribution.to(device)
         )
-        self.assertEqual(output.device.type, device.type)
+        self.assertEqual(distribution.device.type, device.type)
+        self.assertEqual(prop_similarities.device.type, device.type)
 
     def test_output_sum_one_per_graph(self) -> None:
-        input = collate_graphs(self.graph_list)
-        output = self.model(input, self.instruction, self.prop_embeds)
+        output, _ = self.model(self.input, self.instruction, self.distribution)
         self.assertTrue(
             torch.zeros(self.batch_size)
-            .index_add_(0, input.node_indices, output)
+            .index_add_(0, self.input.node_indices, output)
             .allclose(torch.ones(self.batch_size))
         )
 
     def test_grad_init_is_none(self) -> None:
         # Maybe add subtests
         for param in self.model.parameters():
-            self.assertTrue(param.requires_grad)
-            self.assertIsNone(param.grad)
+            if param.requires_grad:
+                self.assertIsNone(param.grad)
 
     def test_backward_simple(self) -> None:
         warnings.simplefilter("ignore", category=UserWarning)
         # Detect anomaly should raise an error whenever a backward op
         # produces a nan value
         with torch.autograd.detect_anomaly():
-            input = collate_graphs(self.graph_list)
-            output = self.model(input, self.instruction, self.prop_embeds)
+            output, _ = self.model(
+                self.input, self.instruction, self.distribution
+            )
             output.sum().backward()
             for param in self.model.parameters():
-                self.assertIsNotNone(param.grad)
+                if param.requires_grad:
+                    self.assertIsNotNone(param.grad)
 
     @unittest.skipIf(not torch.cuda.is_available(), "cuda is not available")
     def test_backward_simple_cuda(self) -> None:
         warnings.simplefilter("ignore", category=UserWarning)
         with torch.autograd.detect_anomaly():
             dev = torch.device("cuda")
-            input = collate_graphs(self.graph_list, device=dev)
+            input = self.input.to(dev)
             model = self.model.to(dev)
-            output = model(
-                input, self.instruction.to(dev), self.prop_embeds.to(dev)
+            output, _ = model(
+                input, self.instruction.to(dev), self.distribution.to(dev)
             )
             output.sum().backward()
             for param in self.model.parameters():
                 self.assertIsNotNone(param.grad)
+
+
+@unittest.skip("wip")
+class TestNSM(unittest.TestCase):
+    def setUpt(self) -> None:
+        self.n_properties = 77
+        self.hidden_size = 300
+        self.computation_steps = 8
+        self.vocab = torch.rand(1335, self.hidden_size)
+        self.prop_embeds = torch.rand(self.n_properties, self.hidden_size)
+        self.model = NSM(
+            self.vocab, self.prop_embeds, self.computation_steps, 2000
+        )
+
+    def test_output_shape(self) -> None:
+
+        pass

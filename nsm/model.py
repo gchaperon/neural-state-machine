@@ -4,21 +4,22 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import PackedSequence, pad_packed_sequence
 from nsm.utils import Batch
 
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Tuple
 
 
 class NormalizeWordsModel(nn.Module):
     def __init__(self, vocab: torch.Tensor) -> None:
         super(NormalizeWordsModel, self).__init__()
 
+        hidden_size = vocab.size(1)
         self.vocab = nn.Parameter(vocab, requires_grad=False)
-        self.default_embed = nn.Parameter(torch.rand(300))
-        self.W = nn.Parameter(torch.eye(300))
+        self.default_embed = nn.Parameter(torch.rand(hidden_size))
+        self.W = nn.Parameter(torch.eye(hidden_size))
 
     def forward(self, input: PackedSequence) -> PackedSequence:
         # input should be PackedSequence
         words, *rest = input
-        C = torch.cat((self.vocab.T, self.default_embed.view(-1, 1)), dim=1)
+        C = torch.vstack((self.vocab, self.default_embed)).T
         P = F.softmax(words @ self.W @ C, dim=1)
         V = P[:, -1:] * words + P[:, :-1] @ self.vocab
         return PackedSequence(V, *rest)
@@ -30,7 +31,7 @@ class InstructionsDecoder(nn.Module):
         hidden_size: int,
         n_instructions: int,
         bias: bool = True,
-        nonlinearity: str = "tanh",
+        nonlinearity: str = "relu",
     ) -> None:
         super(InstructionsDecoder, self).__init__()
         self.n_instructions = n_instructions
@@ -50,19 +51,25 @@ class InstructionsDecoder(nn.Module):
 class InstructionsModel(nn.Module):
     def __init__(self, vocab: torch.Tensor, n_instructions: int) -> None:
         super(InstructionsModel, self).__init__()
-        self.n_instructions = n_instructions
 
+        hidden_size = vocab.size(1)
+
+        self.n_instructions = n_instructions
         self.tagger = NormalizeWordsModel(vocab)
-        self.encoder = nn.LSTM(input_size=300, hidden_size=300, dropout=0.0)
+        self.encoder = nn.LSTM(
+            input_size=hidden_size, hidden_size=hidden_size, dropout=0.0
+        )
         self.decoder = InstructionsDecoder(
-            hidden_size=300, n_instructions=n_instructions
+            hidden_size=hidden_size, n_instructions=n_instructions
         )
 
-    def forward(self, input: PackedSequence) -> torch.Tensor:
+    def forward(
+        self, input: PackedSequence
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         # input should be a PackedSequence
         V = self.tagger(input)
-        _, (q, _) = self.encoder(V)
-        H = self.decoder(q.squeeze())
+        Q = self.encoder(V)[1][0].squeeze()  # get last hidden
+        H = self.decoder(Q)
         # Unpack sequences
         V, lens_unpacked = pad_packed_sequence(V, batch_first=True)
         # Prepare mask for attention
@@ -83,13 +90,15 @@ class InstructionsModel(nn.Module):
         tmp[mask] = float("-inf")
         # Instructions
         R = F.softmax(tmp, dim=-1) @ V
-        return R
+        return R, Q
 
 
 class NSMCell(nn.Module):
-    def __init__(self, hidden_size: int, n_properties: int) -> None:
+    def __init__(self, prop_embeds: torch.Tensor) -> None:
         super(NSMCell, self).__init__()
 
+        n_properties, hidden_size = prop_embeds.size()
+        self.prop_embeds = nn.Parameter(prop_embeds, requires_grad=False)
         self.Ws_property = nn.Parameter(
             torch.rand(n_properties, hidden_size, hidden_size)
         )
@@ -101,21 +110,17 @@ class NSMCell(nn.Module):
         self,
         batch: Batch,
         instruction: torch.Tensor,
-        prop_embeds: torch.Tensor,
-        distribution: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        # Initialize distribution to uniform if not present
-        distribution = (
-            distribution or (1 / batch.nodes_per_graph)[batch.node_indices]
-        )
+        distribution: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         # Compute similarity between instruction and attribute
         # categories, aka properties
-        prop_similarities = F.softmax(instruction @ prop_embeds.T, dim=0)
+        prop_similarities = F.softmax(instruction @ self.prop_embeds.T, dim=1)
+        # breakpoint()
         # Compute node and edge score
         node_scores = F.elu(
             torch.sum(
-                prop_similarities[:-1, None]
-                * instruction
+                prop_similarities[batch.node_indices, :-1, None]
+                * instruction[batch.node_indices, None]
                 * self.Ws_property[:-1]
                 .matmul(batch.node_attrs.unsqueeze(-1))
                 .squeeze(),
@@ -123,7 +128,7 @@ class NSMCell(nn.Module):
             )
         )
         edge_scores = F.elu(
-            instruction
+            instruction[batch.edge_batch_indices]
             * self.Ws_property[-1]
             .matmul(batch.edge_attrs.unsqueeze(-1))
             .squeeze()
@@ -160,8 +165,58 @@ class NSMCell(nn.Module):
             .values()
         )
         # Compute next distribution
+        # breakpoint()
         next_distribution = (
-            prop_similarities[-1] * next_distribution_relations
-            + (1 - prop_similarities[-1]) * next_distribution_states
+            prop_similarities[batch.node_indices, -1]
+            * next_distribution_relations
+            + (1 - prop_similarities[batch.node_indices, -1])
+            * next_distribution_states
         )
-        return next_distribution
+        return next_distribution, prop_similarities
+
+
+class NSM(nn.Module):
+    def __init__(
+        self,
+        vocab: torch.Tensor,
+        prop_embeds: torch.Tensor,
+        computation_steps: int,
+        out_size: int,
+    ) -> None:
+        super(NSM, self).__init__()
+        self.instructions_model = InstructionsModel(
+            vocab, n_instructions=computation_steps
+        )
+        self.nsm_cell = NSMCell(prop_embeds)
+        vocab_size, hidden_size = vocab.size()
+        self.linear = nn.Linear(2 * hidden_size, out_size)
+
+    def forward(
+        self, graph_batch: Batch, question_batch: PackedSequence
+    ) -> torch.Tensor:
+        instructions, encoded_questions = self.instructions_model(
+            question_batch
+        )
+        # Initialize distribution
+        distribution = (1 / graph_batch.nodes_per_graph)[
+            graph_batch.node_indices
+        ]
+        # Just so that mypy doesn't complain
+        prop_similarities = torch.empty([])
+        # Simulate execution of finite automaton
+        for instruction in instructions.transpose(0, 1):
+            distribution, prop_similarities = self.nsm_cell(
+                graph_batch, instruction, distribution
+            )
+
+        aggregated: torch.Tensor = torch.zeros_like(
+            encoded_questions
+        ).index_add_(
+            0,
+            graph_batch.node_indices,
+            distribution[:, None]
+            * torch.sum(
+                prop_similarities[:-1, None] * graph_batch.node_attrs, dim=1
+            ),
+        )
+        return self.linear(torch.hstack((encoded_questions, aggregated)))
