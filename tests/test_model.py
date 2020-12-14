@@ -254,7 +254,7 @@ class TestNSM(unittest.TestCase):
                 reverse=True,
             )
         )
-    @unittest.skipIf(os.environ.get("SKIP_LONGASS_CPU_TESTS"), "skipping long cpu tests")
+    @unittest.skipUnless("SKIP_LONGASS_TESTS" in os.environ, "I warne you")
     def test_output_shape(self) -> None:
         output = self.model(self.graph_batch, self.question_batch)
         self.assertEqual(output.shape, (self.batch_size, self.output_size))

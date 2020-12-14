@@ -7,3 +7,10 @@ data/
 # Environments
 env/
 
+# Unit test / coverage reports
+htmlcov/
+.coverage
+.coverage.*
+
+# mypy
+.mypy_cache/
