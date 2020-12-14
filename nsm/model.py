@@ -1,4 +1,5 @@
 import torch
+from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import PackedSequence, pad_packed_sequence
@@ -7,90 +8,93 @@ from nsm.utils import Batch, matmul_memcapped
 from typing import Optional, List, Union, Tuple
 
 
-class NormalizeWordsModel(nn.Module):
-    def __init__(self, vocab: torch.Tensor) -> None:
-        super(NormalizeWordsModel, self).__init__()
+class Tagger(nn.Module):
+    def __init__(self, embedding_size) -> None:
+        super(Tagger, self).__init__()
 
-        hidden_size = vocab.size(1)
-        self.vocab = nn.Parameter(vocab, requires_grad=False)
-        self.default_embed = nn.Parameter(torch.rand(hidden_size))
-        self.W = nn.Parameter(torch.eye(hidden_size))
+        self.default_embedding = nn.Parameter(torch.rand(embedding_size))
+        self.weight = nn.Parameter(torch.eye(embedding_size))
 
-    def forward(self, input: PackedSequence) -> PackedSequence:
-        # input should be PackedSequence
-        words, *rest = input
-        C = torch.vstack((self.vocab, self.default_embed)).T
-        P = F.softmax(words @ self.W @ C, dim=1)
-        V = P[:, -1:] * words + P[:, :-1] @ self.vocab
-        return PackedSequence(V, *rest)
+    def forward(
+        self, vocab: Tensor, question_batch: PackedSequence
+    ) -> PackedSequence:
+        tokens, *rest = question_batch
+        similarity = F.softmax(
+            tokens
+            @ self.weight
+            @ torch.vstack((vocab, self.default_embedding)).T,
+            dim=1,
+        )
+        concept_based = (
+            similarity[:, -1:] * tokens + similarity[:, :-1] @ vocab
+        )
+        return PackedSequence(concept_based, *rest)
 
 
-class InstructionsDecoder(nn.Module):
+class InstructionDecoder(nn.Module):
     def __init__(
         self,
+        input_size: int,
         hidden_size: int,
         n_instructions: int,
         bias: bool = True,
         nonlinearity: str = "relu",
     ) -> None:
-        super(InstructionsDecoder, self).__init__()
+        super(InstructionDecoder, self).__init__()
         self.n_instructions = n_instructions
-        self.rnn_cell = nn.RNNCell(
-            hidden_size, hidden_size, bias, nonlinearity
-        )
+        self.rnn_cell = nn.RNNCell(input_size, hidden_size, bias, nonlinearity)
 
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
+    def forward(self, input: Tensor) -> Tensor:
+        # Explicit better than implicit, amarite (?)
         hx: torch.Tensor = torch.zeros_like(input)
-        hiddens: List[torch.Tensor] = []
+        hiddens: List[Tensor] = []
         for _ in range(self.n_instructions):
             hx = self.rnn_cell(input, hx)
             hiddens.append(hx)
-        return torch.cat([t.unsqueeze(1) for t in hiddens], dim=1)
+        return torch.stack(hiddens, dim=1)
 
 
 class InstructionsModel(nn.Module):
-    def __init__(self, vocab: torch.Tensor, n_instructions: int) -> None:
+    def __init__(self, embedding_size: int, n_instructions: int) -> None:
         super(InstructionsModel, self).__init__()
 
-        hidden_size = vocab.size(1)
-
-        self.n_instructions = n_instructions
-        self.tagger = NormalizeWordsModel(vocab)
+        self.tagger = Tagger(embedding_size)
         self.encoder = nn.LSTM(
-            input_size=hidden_size, hidden_size=hidden_size, dropout=0.0
+            input_size=embedding_size, hidden_size=embedding_size, dropout=0.0
         )
-        self.decoder = InstructionsDecoder(
-            hidden_size=hidden_size, n_instructions=n_instructions
+        self.decoder = InstructionDecoder(
+            input_size=embedding_size,
+            hidden_size=embedding_size,
+            n_instructions=n_instructions,
         )
 
     def forward(
-        self, input: PackedSequence
+        self, vocab: Tensor, question_batch: PackedSequence
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         # input should be a PackedSequence
-        V = self.tagger(input)
-        Q = self.encoder(V)[1][0].squeeze()  # get last hidden
-        H = self.decoder(Q)
+        tagged = self.tagger(vocab, question_batch)
+        encoded = self.encoder(tagged)[1][0].squeeze()  # get last hidden
+        hidden = self.decoder(encoded)
         # Unpack sequences
-        V, lens_unpacked = pad_packed_sequence(V, batch_first=True)
-        # Prepare mask for attention
-        seq_len = V.size(1)
-        mask = (
-            torch.cat(
-                [
-                    torch.ones(seq_len - l, dtype=torch.long) * i
-                    for i, l in enumerate(lens_unpacked)
-                ]
-            ),
-            torch.arange(self.n_instructions)[:, None],
-            torch.cat([torch.arange(l, seq_len) for l in lens_unpacked]),
+        tagged_unpacked, lens_unpacked = pad_packed_sequence(
+            tagged, batch_first=True
         )
+        # Prepare mask for attention
+        max_seq_len = tagged_unpacked.size(1)
+        batch_size, n_instructions = hidden.size()[:2]
         # Intermediate multiplication
-        tmp = H @ V.transpose(1, 2)
+        tmp = hidden @ tagged_unpacked.transpose(1, 2)
         # Mask values for softmax
-        tmp[mask] = float("-inf")
+        tmp[
+            torch.arange(batch_size).repeat_interleave(
+                max_seq_len - lens_unpacked
+            ),
+            :,
+            torch.cat([torch.arange(l, max_seq_len) for l in lens_unpacked]),
+        ] = float("-inf")
         # Instructions
-        R = F.softmax(tmp, dim=-1) @ V
-        return R, Q
+        instructions = F.softmax(tmp, dim=-1) @ tagged_unpacked
+        return instructions, encoded
 
 
 class NSMCell(nn.Module):

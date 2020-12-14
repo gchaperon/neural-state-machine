@@ -5,12 +5,16 @@ import warnings
 
 from itertools import islice
 import torch
-from torch.nn.utils.rnn import PackedSequence, pack_sequence
+from torch.nn.utils.rnn import (
+    PackedSequence,
+    pack_sequence,
+    pad_packed_sequence,
+)
 
 from nsm.model import (
-    InstructionsDecoder,
+    InstructionDecoder,
     InstructionsModel,
-    NormalizeWordsModel,
+    Tagger,
     NSMCell,
     NSM,
 )
@@ -20,18 +24,18 @@ from nsm.utils import collate_graphs, infinite_graphs
 warnings.simplefilter("ignore", category=UserWarning)
 
 
-class TestQuestionNormalization(unittest.TestCase):
+class TaggerTestCase(unittest.TestCase):
     def setUp(self) -> None:
-        self.hidden_size = 300
-        self.vocab_size = 1335
-        self.vocab = torch.rand(self.vocab_size, self.hidden_size)
-        self.model = NormalizeWordsModel(self.vocab)
+        self.embedding_size = 300
+        vocab_len = 1335
         self.batch_size = 64
+        self.vocab = torch.rand(vocab_len, self.embedding_size)
+        self.model = Tagger(self.embedding_size)
         # batch of questions, lengths between 10 and 20
-        self.input = pack_sequence(
+        self.question_batch = pack_sequence(
             sorted(
                 [
-                    torch.rand(random.randint(10, 20), self.hidden_size)
+                    torch.rand(random.randint(10, 20), self.embedding_size)
                     for i in range(self.batch_size)
                 ],
                 key=len,
@@ -40,85 +44,96 @@ class TestQuestionNormalization(unittest.TestCase):
         )
 
     def test_output_type(self) -> None:
-        output = self.model(self.input)
+        output = self.model(self.vocab, self.question_batch)
         self.assertIsInstance(output, PackedSequence)
 
-    def test_question_normalization(self) -> None:
-        output = self.model(self.input)
-        self.assertEqual(output.data.shape, self.input.data.shape)
+    def test_output_shape(self) -> None:
+        output = self.model(self.vocab, self.question_batch)
+        self.assertEqual(output.data.shape, self.question_batch.data.shape)
+        self.assertEqual(
+            pad_packed_sequence(output, batch_first=True)[0].size(0),
+            self.batch_size,
+        )
 
     @unittest.skipIf(not torch.cuda.is_available(), "cuda is not available")
     def test_output_cuda(self) -> None:
         model = self.model.cuda()
-        output = model(self.input.to("cuda"))
+        output = model(self.vocab.to("cuda"), self.question_batch.to("cuda"))
         self.assertTrue(output.is_cuda)
 
 
-class TestInstructionsDecoder(unittest.TestCase):
+class InstructionDecoderTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.n_instructions = 8
         self.batch_size = 64
-        self.hidden_size = 300
+        self.input_size = 300
         # for each question in the batch there is a vector representing it
-        self.input = torch.rand(self.batch_size, self.hidden_size)
-        self.model = InstructionsDecoder(
-            hidden_size=self.hidden_size,
+        self.encoded = torch.rand(self.batch_size, self.input_size)
+        self.model = InstructionDecoder(
+            input_size=self.input_size,
+            hidden_size=self.input_size,
             n_instructions=self.n_instructions,
-            nonlinearity="relu",
         )
 
     def test_output_type(self) -> None:
-        output = self.model(self.input)
+        output = self.model(self.encoded)
         self.assertIsInstance(output, torch.Tensor)
 
     def test_hidden_states(self) -> None:
-        output = self.model(self.input)
+        output = self.model(self.encoded)
         self.assertEqual(
             output.shape,
-            (self.batch_size, self.n_instructions, self.hidden_size),
+            (self.batch_size, self.n_instructions, self.input_size),
         )
 
     @unittest.skipIf(not torch.cuda.is_available(), "cuda is not available")
     def test_output_cuda(self) -> None:
         model = self.model.cuda()
-        output = model(self.input.cuda())
+        output = model(self.encoded.cuda())
         self.assertTrue(output.is_cuda)
 
 
-class TestInstructionsModel(unittest.TestCase):
+class InstructionsModelTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.n_instructions = 8
-        self.hidden_size = 300
+        self.embedding_size = 300
         self.batch_size = 64
-        self.vocab = torch.rand(1335, self.hidden_size)
-        self.model = InstructionsModel(self.vocab, self.n_instructions)
-        self.questions = [
-            torch.rand(random.randint(10, 20), self.hidden_size)
-            for _ in range(self.batch_size)
-        ]
-        self.input = pack_sequence(
-            sorted(self.questions, key=len, reverse=True)
+        vocab_len = 1335
+        self.vocab = torch.rand(vocab_len, self.embedding_size)
+        self.model = InstructionsModel(
+            self.embedding_size, self.n_instructions
+        )
+        self.question_batch = pack_sequence(
+            sorted(
+                [
+                    torch.rand(random.randint(10, 20), self.embedding_size)
+                    for _ in range(self.batch_size)
+                ],
+                key=len,
+                reverse=True,
+            )
         )
 
     def test_output_type(self) -> None:
-        output = self.model(self.input)
-        self.assertIsInstance(output, tuple)
-        self.assertIsInstance(output[0], torch.Tensor)
-        self.assertIsInstance(output[1], torch.Tensor)
+        instructions, encoded = self.model(self.vocab, self.question_batch)
+        self.assertIsInstance(instructions, torch.Tensor)
+        self.assertIsInstance(encoded, torch.Tensor)
 
     def test_output_shape(self) -> None:
-        instructions, encoded = self.model(self.input)
+        instructions, encoded = self.model(self.vocab, self.question_batch)
         self.assertEqual(
             instructions.size(),
-            (self.batch_size, self.n_instructions, self.hidden_size),
+            (self.batch_size, self.n_instructions, self.embedding_size),
         )
         self.assertFalse(instructions.isnan().any())
-        self.assertEqual(encoded.size(), (self.batch_size, self.hidden_size))
+        self.assertEqual(
+            encoded.size(), (self.batch_size, self.embedding_size)
+        )
 
     @unittest.skipIf(not torch.cuda.is_available(), "cuda is not available")
     def test_output_cuda(self) -> None:
         model = self.model.cuda()
-        instructions, encoded = model(self.input.to("cuda"))
+        instructions, encoded = model(self.question_batch.to("cuda"))
         self.assertTrue(instructions.is_cuda)
         self.assertTrue(encoded.is_cuda)
 
