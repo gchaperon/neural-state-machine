@@ -134,7 +134,9 @@ class InstructionsModelTestCase(unittest.TestCase):
     @unittest.skipIf(not torch.cuda.is_available(), "cuda is not available")
     def test_output_cuda(self) -> None:
         model = self.model.cuda()
-        instructions, encoded = model(self.question_batch.to("cuda"))
+        instructions, encoded = model(
+            self.vocab.to("cuda"), self.question_batch.to("cuda")
+        )
         self.assertTrue(instructions.is_cuda)
         self.assertTrue(encoded.is_cuda)
 
@@ -303,7 +305,10 @@ class NSMTestCase(unittest.TestCase):
         device = torch.device("cuda")
         model = self.model.to(device)
         output = model(
-            self.graph_batch.to(device), self.question_batch.to(device)
+            self.graph_batch.to(device),
+            self.question_batch.to(device),
+            self.vocab.to(device),
+            self.prop_embeds.to(device),
         )
         self.assertEqual(output.device.type, device.type)
         self.assertEqual(output.shape, (self.batch_size, self.output_size))
@@ -315,7 +320,10 @@ class NSMTestCase(unittest.TestCase):
             device = torch.device("cuda")
             model = self.model.to(device)
             output = model(
-                self.graph_batch.to(device), self.question_batch.to(device)
+                self.graph_batch.to(device),
+                self.question_batch.to(device),
+                self.vocab.to(device),
+                self.prop_embeds.to(device),
             )
             output.sum().backward()
             for param in model.parameters():

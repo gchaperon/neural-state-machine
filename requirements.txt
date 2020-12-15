@@ -1,2 +1,2 @@
 pydantic==1.7.2
-torch==1.7.0
+torch==1.7.1+cu110 
