@@ -1,10 +1,11 @@
-import os 
+import os
 import random
 import unittest
 import warnings
 
 from itertools import islice
 import torch
+import torch.nn.functional as F
 from torch.nn.utils.rnn import (
     PackedSequence,
     pack_sequence,
@@ -138,120 +139,140 @@ class InstructionsModelTestCase(unittest.TestCase):
         self.assertTrue(encoded.is_cuda)
 
 
-class TestNSMCell(unittest.TestCase):
+class NSMCellTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.batch_size = 8
-        self.hidden_size = 100
-        self.n_properties = 20
-        # NOTE: plus one to account for the relations
-        self.prop_embeds = torch.rand(self.n_properties + 1, self.hidden_size)
-        self.model = NSMCell(self.prop_embeds)
-        self.graph_list = list(
-            islice(
-                infinite_graphs(
-                    self.hidden_size,
-                    self.n_properties,
-                    node_distribution=(16.4, 8.2),
-                    density_distribution=(0.2, 0.4),
-                ),
-                self.batch_size,
+        self.input_size = 100
+        self.n_node_properties = 20
+        self.model = NSMCell(self.input_size, self.n_node_properties)
+        self.graph_batch = collate_graphs(
+            list(
+                islice(
+                    infinite_graphs(
+                        self.input_size,
+                        self.n_node_properties,
+                        node_distribution=(16.4, 8.2),
+                        density_distribution=(0.2, 0.4),
+                    ),
+                    self.batch_size,
+                )
             )
         )
-        self.input = collate_graphs(self.graph_list)
-        self.instruction = torch.rand(self.batch_size, self.hidden_size)
-        # for testing purposes it doesn't matter that the probs sum to
-        # one per graph
-        self.distribution = torch.rand(self.input.node_attrs.size(0))
+        self.instruction_batch = torch.rand(self.batch_size, self.input_size)
+        self.distribution = (1.0 / self.graph_batch.nodes_per_graph)[
+            self.graph_batch.node_indices
+        ]
+        all_prop_similarities = F.softmax(
+            self.instruction_batch
+            @ torch.rand(self.input_size, self.n_node_properties + 1),
+            dim=1,
+        )
+        self.node_prop_similarities = all_prop_similarities[:, :-1]
+        self.relation_similarity = all_prop_similarities[:, -1]
 
     def test_output_shape(self) -> None:
-        distribution, prop_similarities = self.model(
-            self.input, self.instruction, self.distribution
+        out_distribution = self.model(
+            self.graph_batch,
+            self.instruction_batch,
+            self.distribution,
+            self.node_prop_similarities,
+            self.relation_similarity,
         )
-        self.assertEqual(distribution.ndim, 1)
-        self.assertEqual(prop_similarities.ndim, 2)
-        self.assertEqual(distribution.size(0), self.input.node_attrs.size(0))
+        self.assertEqual(out_distribution.ndim, 1)
         self.assertEqual(
-            prop_similarities.size(),
-            (self.batch_size, self.prop_embeds.size(0)),
+            out_distribution.size(0), self.graph_batch.node_attrs.size(0)
         )
 
     @unittest.skipIf(not torch.cuda.is_available(), "cuda is not available")
     def test_output_shape_cuda(self) -> None:
         device = torch.device("cuda")
         model = self.model.to(device)
-        input = self.input.to(device)
-        distribution, prop_similarities = self.model(
-            input, self.instruction.to(device), self.distribution.to(device)
+        graph_batch = self.graph_batch.to(device)
+        output = self.model(
+            graph_batch,
+            self.instruction_batch.to(device),
+            self.distribution.to(device),
+            self.node_prop_similarities.to(device),
+            self.relation_similarity.to(device),
         )
-        self.assertEqual(distribution.device.type, device.type)
-        self.assertEqual(prop_similarities.device.type, device.type)
+        self.assertEqual(output.device.type, device.type)
 
     def test_output_sum_one_per_graph(self) -> None:
-        output, _ = self.model(self.input, self.instruction, self.distribution)
+        output = self.model(
+            self.graph_batch,
+            self.instruction_batch,
+            self.distribution,
+            self.node_prop_similarities,
+            self.relation_similarity,
+        )
         self.assertTrue(
             torch.zeros(self.batch_size)
-            .index_add_(0, self.input.node_indices, output)
+            .index_add_(0, self.graph_batch.node_indices, output)
             .allclose(torch.ones(self.batch_size))
         )
 
     def test_grad_init_is_none(self) -> None:
         # Maybe add subtests
         for param in self.model.parameters():
-            if param.requires_grad:
-                self.assertIsNone(param.grad)
+            self.assertIsNone(param.grad)
 
     def test_backward_simple(self) -> None:
         warnings.simplefilter("ignore", category=UserWarning)
         # Detect anomaly should raise an error whenever a backward op
         # produces a nan value
         with torch.autograd.detect_anomaly():
-            output, _ = self.model(
-                self.input, self.instruction, self.distribution
+            output = self.model(
+                self.graph_batch,
+                self.instruction_batch,
+                self.distribution,
+                self.node_prop_similarities,
+                self.relation_similarity,
             )
             output.sum().backward()
             for param in self.model.parameters():
-                if param.requires_grad:
-                    self.assertIsNotNone(param.grad)
+                self.assertIsNotNone(param.grad)
 
     @unittest.skipIf(not torch.cuda.is_available(), "cuda is not available")
     def test_backward_simple_cuda(self) -> None:
         warnings.simplefilter("ignore", category=UserWarning)
         with torch.autograd.detect_anomaly():
             dev = torch.device("cuda")
-            input = self.input.to(dev)
             model = self.model.to(dev)
-            output, _ = model(
-                input, self.instruction.to(dev), self.distribution.to(dev)
+            output = model(
+                self.graph_batch.to(dev),
+                self.instruction_batch.to(dev),
+                self.distribution.to(dev),
+                self.node_prop_similarities.to(dev),
+                self.relation_similarity.to(dev),
             )
             output.sum().backward()
             for param in self.model.parameters():
-                if param.requires_grad:
-                    self.assertIsNotNone(param.grad)
+                self.assertIsNotNone(param.grad)
 
 
-# @unittest.skip("wip")
-class TestNSM(unittest.TestCase):
+class NSMTestCase(unittest.TestCase):
     def setUp(self) -> None:
         # These tests should be unsing expected dimensions
-        self.n_properties = 78
-        self.hidden_size = 300
-        self.computation_steps = 8
         self.batch_size = 64
-        self.vocab = torch.rand(1335, self.hidden_size)
-        self.prop_embeds = torch.rand(self.n_properties, self.hidden_size)
         self.output_size = 2000
+        n_node_properties = 78
+        input_size = 300
+        computation_steps = 8
+
+        self.vocab = torch.rand(1335, input_size)
+        self.prop_embeds = torch.rand(n_node_properties + 1, input_size)
         self.model = NSM(
-            self.vocab,
-            self.prop_embeds,
-            self.computation_steps,
+            input_size,
+            n_node_properties,
+            computation_steps,
             self.output_size,
         )
         self.graph_batch = collate_graphs(
             list(
                 islice(
                     infinite_graphs(
-                        self.hidden_size,
-                        self.n_properties - 1,
+                        input_size,
+                        n_node_properties,
                         node_distribution=(16.4, 8.2),
                         density_distribution=(0.2, 0.4),
                     ),
@@ -262,16 +283,19 @@ class TestNSM(unittest.TestCase):
         self.question_batch = pack_sequence(
             sorted(
                 [
-                    torch.rand(random.randint(10, 20), self.hidden_size)
+                    torch.rand(random.randint(10, 20), input_size)
                     for _ in range(self.batch_size)
                 ],
                 key=len,
                 reverse=True,
             )
         )
-    @unittest.skipUnless("SKIP_LONGASS_TESTS" in os.environ, "I warne you")
+
+    @unittest.skipUnless("RUN_LONGASS_TESTS" in os.environ, "I warned you")
     def test_output_shape(self) -> None:
-        output = self.model(self.graph_batch, self.question_batch)
+        output = self.model(
+            self.graph_batch, self.question_batch, self.vocab, self.prop_embeds
+        )
         self.assertEqual(output.shape, (self.batch_size, self.output_size))
 
     @unittest.skipIf(not torch.cuda.is_available(), "cuda not available")
@@ -285,13 +309,14 @@ class TestNSM(unittest.TestCase):
         self.assertEqual(output.shape, (self.batch_size, self.output_size))
 
     @unittest.skipIf(not torch.cuda.is_available(), "cuda not available")
-    def test_backward_Cuda(self) ->None:
+    def test_backward_cuda(self) -> None:
         warnings.simplefilter("ignore", category=UserWarning)
         with torch.autograd.detect_anomaly():
             device = torch.device("cuda")
             model = self.model.to(device)
-            output = model(self.graph_batch.to(device), self.question_batch.to(device))
+            output = model(
+                self.graph_batch.to(device), self.question_batch.to(device)
+            )
             output.sum().backward()
             for param in model.parameters():
-                if param.requires_grad:
-                    self.assertIsNotNone(param.grad)
+                self.assertIsNotNone(param.grad)

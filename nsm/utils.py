@@ -174,22 +174,6 @@ def collate_graphs(
     )
 
 
-def broadcast_size(s1: Sequence[int], s2: Sequence[int]) -> Sequence[int]:
-    assert (
-        len(s1) > 0 and len(s2) > 0
-    ), "Each tensor must have at least one dimension"
-
-    out: List[int] = []
-    for d1, d2 in zip_longest(reversed(s1), reversed(s2), fillvalue=1):
-        assert d1 == d2 or any(
-            d == 1 for d in (d1, d2)
-        ), "Dimensions must be either equal or one of them is one"
-        out.append(max(d1, d2))
-
-    # fuckit
-    return type(s1)(reversed(out))  # type:ignore
-
-
 def matmul_memcapped(
     parameter: torch.Tensor, nodes: torch.Tensor, *, memory_cap: int
 ) -> torch.Tensor:
@@ -206,13 +190,7 @@ def matmul_memcapped(
         * parameter.element_size()
         / memory_cap
     )
-    #if chunks == 1: print("no chunking needed", end="")
+    # if chunks == 1: print("no chunking needed", end="")
     return torch.cat(
         [parameter @ T for T in nodes.chunk(chunks, dim=0)], dim=0
     )
-
-
-def matmul_split_size(
-    t1: torch.Tensor, t2: torch.Tensor, max_memory: int = 10
-):
-    pass
