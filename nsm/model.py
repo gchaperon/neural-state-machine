@@ -16,19 +16,13 @@ class Tagger(nn.Module):
         self.default_embedding = nn.Parameter(torch.rand(embedding_size))
         self.weight = nn.Parameter(torch.eye(embedding_size))
 
-    def forward(
-        self, vocab: Tensor, question_batch: PackedSequence
-    ) -> PackedSequence:
+    def forward(self, vocab: Tensor, question_batch: PackedSequence) -> PackedSequence:
         tokens, *rest = question_batch
         similarity = F.softmax(
-            tokens
-            @ self.weight
-            @ torch.vstack((vocab, self.default_embedding)).T,
+            tokens @ self.weight @ torch.vstack((vocab, self.default_embedding)).T,
             dim=1,
         )
-        concept_based = (
-            similarity[:, -1:] * tokens + similarity[:, :-1] @ vocab
-        )
+        concept_based = similarity[:, -1:] * tokens + similarity[:, :-1] @ vocab
         return PackedSequence(concept_based, *rest)
 
 
@@ -77,18 +71,14 @@ class InstructionsModel(nn.Module):
         encoded = self.encoder(tagged)[1][0].squeeze()  # get last hidden
         hidden = self.decoder(encoded)
         # Unpack sequences
-        tagged_unpacked, lens_unpacked = pad_packed_sequence(
-            tagged, batch_first=True
-        )
+        tagged_unpacked, lens_unpacked = pad_packed_sequence(tagged, batch_first=True)
         # Intermediate multiplication
         tmp = hidden @ tagged_unpacked.transpose(1, 2)
         # Mask values for softmax
         max_seq_len = tagged_unpacked.size(1)
         batch_size, n_instructions = hidden.size()[:2]
         tmp[
-            torch.arange(batch_size).repeat_interleave(
-                max_seq_len - lens_unpacked
-            ),
+            torch.arange(batch_size).repeat_interleave(max_seq_len - lens_unpacked),
             :,
             torch.cat([torch.arange(l, max_seq_len) for l in lens_unpacked]),
         ] = float("-inf")
@@ -132,9 +122,7 @@ class NSMCell(nn.Module):
         )
         edge_scores = F.elu(
             instruction_batch[graph_batch.edge_batch_indices]
-            * self.weight_edge.matmul(
-                graph_batch.edge_attrs.unsqueeze(-1)
-            ).squeeze()
+            * self.weight_edge.matmul(graph_batch.edge_attrs.unsqueeze(-1)).squeeze()
         )
         # Compute state component for next distribution
         next_distribution_states = (
@@ -158,8 +146,7 @@ class NSMCell(nn.Module):
                     .index_add_(
                         0,
                         graph_batch.edge_indices[1],
-                        distribution[graph_batch.edge_indices[0], None]
-                        * edge_scores,
+                        distribution[graph_batch.edge_indices[0], None] * edge_scores,
                     )
                     .T,
                 ),
@@ -170,8 +157,7 @@ class NSMCell(nn.Module):
         )
         # Compute next distribution
         next_distribution = (
-            relation_similarity[graph_batch.node_indices]
-            * next_distribution_relations
+            relation_similarity[graph_batch.node_indices] * next_distribution_relations
             + (1 - relation_similarity[graph_batch.node_indices])
             * next_distribution_states
         )
@@ -206,16 +192,12 @@ class NSM(nn.Module):
             concept_vocabulary, question_batch
         )
         # Initialize distribution
-        distribution = (1 / graph_batch.nodes_per_graph)[
-            graph_batch.node_indices
-        ]
+        distribution = (1 / graph_batch.nodes_per_graph)[graph_batch.node_indices]
         # Simulate execution of finite automaton
         for instruction_batch in instructions.transpose(0, 1):
             # Property similarities, denoted by a capital R in the paper
             node_prop_similarities, relation_similarity = (
-                foo := F.softmax(
-                    instruction_batch @ property_embeddings.T, dim=1
-                )
+                foo := F.softmax(instruction_batch @ property_embeddings.T, dim=1)
             )[:, :-1], foo[:, -1]
             distribution = self.nsm_cell(
                 graph_batch,

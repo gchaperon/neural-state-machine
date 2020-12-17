@@ -187,15 +187,9 @@ class CollateGraphs(unittest.TestCase):
             graph = graphs[g_idx]
             node_idx = random.randrange(graph.node_attrs.size(0))
             # breakpoint()
-            correct_edge_attrs = graph.edge_attrs[
-                graph.edge_indices[0] == node_idx
-            ]
-            new_node_idx = (
-                sum(batch.nodes_per_graph.tolist()[:g_idx]) + node_idx
-            )
-            new_edge_attrs = batch.edge_attrs[
-                batch.edge_indices[0] == new_node_idx
-            ]
+            correct_edge_attrs = graph.edge_attrs[graph.edge_indices[0] == node_idx]
+            new_node_idx = sum(batch.nodes_per_graph.tolist()[:g_idx]) + node_idx
+            new_edge_attrs = batch.edge_attrs[batch.edge_indices[0] == new_node_idx]
             # breakpoint()
             self.assertEqual(new_edge_attrs.size(), correct_edge_attrs.size())
             self.assertTrue(new_edge_attrs.eq(correct_edge_attrs).all())

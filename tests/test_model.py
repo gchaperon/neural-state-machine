@@ -100,9 +100,7 @@ class InstructionsModelTestCase(unittest.TestCase):
         self.batch_size = 64
         vocab_len = 1335
         self.vocab = torch.rand(vocab_len, self.embedding_size)
-        self.model = InstructionsModel(
-            self.embedding_size, self.n_instructions
-        )
+        self.model = InstructionsModel(self.embedding_size, self.n_instructions)
         self.question_batch = pack_sequence(
             sorted(
                 [
@@ -126,9 +124,7 @@ class InstructionsModelTestCase(unittest.TestCase):
             (self.batch_size, self.n_instructions, self.embedding_size),
         )
         self.assertFalse(instructions.isnan().any())
-        self.assertEqual(
-            encoded.size(), (self.batch_size, self.embedding_size)
-        )
+        self.assertEqual(encoded.size(), (self.batch_size, self.embedding_size))
 
     @unittest.skipIf(not torch.cuda.is_available(), "cuda is not available")
     def test_output_cuda(self) -> None:
@@ -180,9 +176,7 @@ class NSMCellTestCase(unittest.TestCase):
             self.relation_similarity,
         )
         self.assertEqual(out_distribution.ndim, 1)
-        self.assertEqual(
-            out_distribution.size(0), self.graph_batch.node_attrs.size(0)
-        )
+        self.assertEqual(out_distribution.size(0), self.graph_batch.node_attrs.size(0))
 
     @unittest.skipIf(not torch.cuda.is_available(), "cuda is not available")
     def test_output_shape_cuda(self) -> None:

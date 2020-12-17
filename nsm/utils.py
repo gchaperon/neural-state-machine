@@ -48,20 +48,16 @@ class Batch(Graph):
 
     @property
     def node_indices(self) -> torch.Tensor:
-        return self._get_batch_indices_from_items_per_graph(
-            self.nodes_per_graph
-        )
+        return self._get_batch_indices_from_items_per_graph(self.nodes_per_graph)
 
     @property
     def edge_batch_indices(self) -> torch.Tensor:
-        return self._get_batch_indices_from_items_per_graph(
-            self.edges_per_graph
-        )
+        return self._get_batch_indices_from_items_per_graph(self.edges_per_graph)
 
     def _get_batch_indices_from_items_per_graph(self, tensor):
-        return torch.arange(
-            tensor.size(0), device=tensor.device
-        ).repeat_interleave(tensor)
+        return torch.arange(tensor.size(0), device=tensor.device).repeat_interleave(
+            tensor
+        )
 
     @property
     def sparse_coo_indices(self) -> torch.Tensor:
@@ -91,9 +87,7 @@ class Batch(Graph):
 #            pass
 
 
-def is_connected(
-    edges: Iterable[Tuple[Hashable, Hashable]], n_nodes: int
-) -> bool:
+def is_connected(edges: Iterable[Tuple[Hashable, Hashable]], n_nodes: int) -> bool:
     """Check for (weak) connectivity"""
     adj_set: Mapping[Hashable, set] = defaultdict(set)
     for fr, to in edges:
@@ -135,9 +129,7 @@ def infinite_graphs(
             continue
         node_attrs = torch.rand(n_nodes, n_properties, hidden_size)
 
-        n_edges = abs(
-            round(random.gauss(*density_distribution) * n_nodes ** 2)
-        )
+        n_edges = abs(round(random.gauss(*density_distribution) * n_nodes ** 2))
         edge_index = torch.randint(n_nodes, (2, n_edges))
         edge_attrs = torch.rand(n_edges, hidden_size)
 
@@ -147,20 +139,14 @@ def infinite_graphs(
 def collate_graphs(
     batch: List[Graph], device: Union[str, torch.device] = "cpu"
 ) -> Batch:
-    nodes_per_graph = torch.tensor(
-        [graph.node_attrs.size(0) for graph in batch]
-    )
-    edges_per_graph = torch.tensor(
-        [graph.edge_attrs.size(0) for graph in batch]
-    )
+    nodes_per_graph = torch.tensor([graph.node_attrs.size(0) for graph in batch])
+    edges_per_graph = torch.tensor([graph.edge_attrs.size(0) for graph in batch])
     node_attrs = torch.cat([graph.node_attrs for graph in batch])
     edge_attrs = torch.cat([graph.edge_attrs for graph in batch])
     edge_indices = torch.cat(
         [
             graph.edge_indices + shift
-            for graph, shift in zip(
-                batch, [0, *nodes_per_graph.cumsum(0).tolist()]
-            )
+            for graph, shift in zip(batch, [0, *nodes_per_graph.cumsum(0).tolist()])
         ],
         dim=1,
     )
@@ -184,12 +170,7 @@ def matmul_memcapped(
     assert nodes.dtype == parameter.dtype
     # Get split size
     chunks = math.ceil(
-        parameter.numel()
-        * nodes.size(0)
-        * parameter.element_size()
-        / memory_cap
+        parameter.numel() * nodes.size(0) * parameter.element_size() / memory_cap
     )
     # if chunks == 1: print("no chunking needed", end="")
-    return torch.cat(
-        [parameter @ T for T in nodes.chunk(chunks, dim=0)], dim=0
-    )
+    return torch.cat([parameter @ T for T in nodes.chunk(chunks, dim=0)], dim=0)
