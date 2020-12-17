@@ -1,14 +1,15 @@
 import dataclasses
-from itertools import zip_longest
 import json
 import math
 import random
 from collections import defaultdict
-from functools import wraps, cached_property
+from functools import cached_property, wraps
+from itertools import zip_longest
 from operator import eq
 from pathlib import Path
 from typing import (
     Any,
+    Callable,
     Hashable,
     Iterable,
     Iterator,
@@ -16,14 +17,12 @@ from typing import (
     Literal,
     Mapping,
     NamedTuple,
+    Sequence,
     Set,
     Tuple,
-    Union,
     TypeVar,
-    Sequence,
-    Callable,
+    Union,
 )
-import math
 
 import pydantic
 import torch

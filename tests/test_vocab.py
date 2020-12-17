@@ -1,4 +1,5 @@
 import unittest
+
 from nsm.vocab import Glove, Vocab
 
 

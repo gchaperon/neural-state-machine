@@ -1,15 +1,17 @@
-import unittest
 import random
-from itertools import islice
-import torch
+import unittest
 import warnings
+from itertools import islice
+
+import torch
+
 from nsm.utils import (
+    Batch,
     Graph,
+    collate_graphs,
     infinite_graphs,
     is_connected,
-    collate_graphs,
     matmul_memcapped,
-    Batch,
 )
 
 warnings.filterwarnings("ignore", category=UserWarning)

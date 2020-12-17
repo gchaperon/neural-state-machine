@@ -2,8 +2,8 @@ import os
 import random
 import unittest
 import warnings
-
 from itertools import islice
+
 import torch
 import torch.nn.functional as F
 from torch.nn.utils.rnn import (
@@ -13,13 +13,12 @@ from torch.nn.utils.rnn import (
 )
 
 from nsm.model import (
+    NSM,
     InstructionDecoder,
     InstructionsModel,
-    Tagger,
     NSMCell,
-    NSM,
+    Tagger,
 )
-
 from nsm.utils import collate_graphs, infinite_graphs
 
 warnings.simplefilter("ignore", category=UserWarning)

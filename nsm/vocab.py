@@ -1,35 +1,40 @@
 from __future__ import annotations
+
+import json
 import operator
+import pickle
+from collections import defaultdict
+from dataclasses import dataclass
+from functools import cached_property, lru_cache, reduce
+from itertools import chain
+from operator import add
+from pathlib import Path
+from typing import ClassVar, Dict, Iterable, List, Literal, Optional, cast
+
 import torch
 from torch import Tensor
-from dataclasses import dataclass
-from pathlib import Path
-from typing import List, Dict, Optional, ClassVar, Literal, Iterable
-from functools import cached_property, reduce, lru_cache
-from operator import add
-from collections import defaultdict
-from itertools import chain
-import json
-import pickle
 
 
 @dataclass(frozen=True)
 class Vocab:
     itos: List[str]
-    vectors: Tensor
+    vectors: Optional[Tensor] = None
 
     def __post_init__(self):
         if len(self.itos) != len(set(self.itos)):
             raise ValueError("itos contains duplicates")
-        if len(self.itos) != len(self.vectors):
+        if self.vectors and len(self.itos) != len(self.vectors):
             raise ValueError("itos and vectors sizes don't match")
 
     @classmethod
     def from_iterable(
-        cls, tokens: Iterable[str], vectors: Iterable[Tensor]
+        cls, tokens: Iterable[str], vectors: Optional[Iterable[Tensor]]
     ) -> Vocab:
-        d = {tok: vec for tok, vec in zip(tokens, vectors)}
-        return cls(list(d), torch.vstack(list(d.values())))
+        if vectors:
+            d = dict(zip(tokens, vectors))
+            return cls(list(d), torch.vstack(list(d.values())))
+        else:
+            return cls(list(set(tokens)))
 
     @cached_property
     def stoi(self) -> Dict[str, int]:
@@ -39,10 +44,18 @@ class Vocab:
         return len(self.itos)
 
     def __or__(self, other: Vocab) -> Vocab:
-        d = dict(
-            chain(zip(self.itos, self.vectors), zip(other.itos, other.vectors))
-        )
-        return Vocab(list(d), torch.vstack(list(d.values())))
+        if self.vectors and other.vectors:
+            d = dict(
+                chain(
+                    zip(self.itos, self.vectors),
+                    zip(other.itos, other.vectors),
+                )
+            )
+            return Vocab(list(d), torch.vstack(list(d.values())))
+        elif not self.vectors and not other.vectors:
+            return Vocab(list(set(chain(self.itos, other.itos))))
+        else:
+            raise ValueError("one vocab has tensors and the other doesn't")
 
 
 class Glove:
@@ -50,9 +63,7 @@ class Glove:
     _words: List[str]
     _file_path: Path
 
-    def __init__(
-        self, root_dir: Path, d_size: Literal[50, 100, 200, 300]
-    ) -> None:
+    def __init__(self, root_dir: Path, d_size: Literal[50, 100, 200, 300]) -> None:
         self._file_path = root_dir / self.filename_template.format(d_size)
         with self._file_path.open() as f:
             self._words = [line.split()[0] for line in f]
@@ -61,21 +72,16 @@ class Glove:
         return el in self._words
 
     def get_vectors(self, words: List[str], allow_unk: bool = False) -> Tensor:
-        if not allow_unk and (
-            not_found := [w for w in words if w not in self._words]
-        ):
+        if not allow_unk and (not_found := [w for w in words if w not in self._words]):
             raise ValueError(
-                "The following words don't appear in Glove: "
-                f"{', '.join(not_found)}"
+                "The following words don't appear in Glove: " f"{', '.join(not_found)}"
             )
         vectors: Dict[str, Tensor] = defaultdict(lambda: self.unk_embedding)
         with self._file_path.open() as f:
             for line in f:
                 glove_word, *rest = line.split()
                 if glove_word in words:
-                    vectors[glove_word] = torch.tensor(
-                        [float(s) for s in rest]
-                    )
+                    vectors[glove_word] = torch.tensor([float(s) for s in rest])
         return torch.vstack([vectors[word] for word in words])
 
     @cached_property
@@ -83,10 +89,7 @@ class Glove:
         with self._file_path.open() as f:
             return reduce(
                 add,
-                (
-                    torch.tensor([float(s) for s in line.split()[1:]])
-                    for line in f
-                ),
+                (torch.tensor([float(s) for s in line.split()[1:]]) for line in f),
             )
 
 
@@ -114,9 +117,7 @@ def get_concept_vocab(
     data_path: Path, glove_size: Literal[50, 100, 200, 300] = 300
 ) -> ConceptVocab:
     print("loading concept vocab")
-    cache_path = (
-        data_path / "vgLists" / "cache" / f"concept_vocab_{glove_size}.pkl"
-    )
+    cache_path = data_path / "vgLists" / "cache" / f"concept_vocab_{glove_size}.pkl"
     if cache_path.exists():
         print("found cache at {cache_path}, loading...")
         return pickle.load(cache_path.open(mode="rb"))
@@ -125,8 +126,8 @@ def get_concept_vocab(
 
     print(f"saving cached file to {cache_path}")
     cache_path.parent.mkdir(exist_ok=True)
-    pickle.dump(concept_vocabulary, cache_path.open(mode="wb"))
-    return concept_vocabulary
+    pickle.dump(concept_vocab, cache_path.open(mode="wb"))
+    return concept_vocab
 
 
 def _get_concept_vocab(
@@ -135,9 +136,7 @@ def _get_concept_vocab(
     glove = Glove(data_path / "glove.6B", d_size=300)
     # Get grouped_attrs
     raw_grouped_attrs = json.load(open(data_path / "vgLists" / "attrMap.json"))
-    all_attrs = [
-        attr for group in raw_grouped_attrs.values() for attr in group
-    ]
+    all_attrs = [attr for group in raw_grouped_attrs.values() for attr in group]
     attr_vectors = dict(zip(all_attrs, _get_concept_vectors(all_attrs, glove)))
     grouped_attrs = {
         key: Vocab(itos, torch.vstack([attr_vectors[w] for w in itos]))
@@ -193,6 +192,9 @@ def _get_attr_type_vectors(
     assert set(attr_types) == set(
         grouped_attrs
     ), "shit, attr_types and grouped_attrs keys don't match"
+    assert all(
+        vocab.vectors for vocab in grouped_attrs.values()
+    ), "shit, some vocabs in grouped vocabs don't have tensor, i don't know what to do"
 
     # Get glove vectors for attr types that don't contain number
     # and that are fount in Glove
@@ -210,7 +212,7 @@ def _get_attr_type_vectors(
     vectors = [
         torch.mean(
             torch.vstack(
-                (
+                (  # type: ignore[arg-type]
                     glove_vectors[attr_type],
                     grouped_attrs[attr_type].vectors,
                 )
@@ -218,7 +220,9 @@ def _get_attr_type_vectors(
             dim=0,
         )
         if condition(attr_type)
-        else torch.mean(grouped_attrs[attr_type].vectors, dim=0)
+        else torch.mean(
+            grouped_attrs[attr_type].vectors, dim=0  # type:ignore[arg-type]
+        )
         for attr_type in attr_types
     ]
     return torch.vstack(vectors)

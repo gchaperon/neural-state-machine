@@ -1,11 +1,12 @@
+from typing import List, Optional, Tuple, Union
+
 import torch
-from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
+from torch import Tensor
 from torch.nn.utils.rnn import PackedSequence, pad_packed_sequence
-from nsm.utils import Batch, matmul_memcapped
 
-from typing import Optional, List, Union, Tuple
+from nsm.utils import Batch, matmul_memcapped
 
 
 class Tagger(nn.Module):
