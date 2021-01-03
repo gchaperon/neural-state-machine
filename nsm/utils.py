@@ -2,7 +2,7 @@ import dataclasses
 import json
 import math
 import random
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from functools import cached_property, wraps
 from itertools import zip_longest
 from operator import eq
@@ -22,27 +22,34 @@ from typing import (
     Tuple,
     TypeVar,
     Union,
+    NamedTuple,
 )
-
+import re
 import pydantic
 import torch
+from torch import Tensor
+from torch_scatter.segment_coo import segment_max_coo, segment_sum_coo
 
 
-@pydantic.dataclasses.dataclass(frozen=True)
+@pydantic.dataclasses.dataclass
 class Config:
     data_dir: Path
     embedding_size: Literal[50, 100, 200, 300]
 
 
-@dataclasses.dataclass(frozen=True)
-class Graph:
+# @dataclasses.dataclass
+class Graph(NamedTuple):
     node_attrs: torch.Tensor
     edge_indices: torch.Tensor
     edge_attrs: torch.Tensor
 
 
-@dataclasses.dataclass(frozen=True)
-class Batch(Graph):
+# @dataclasses.dataclass
+# class Batch(Graph):
+class Batch(NamedTuple):
+    node_attrs: torch.Tensor
+    edge_indices: torch.Tensor
+    edge_attrs: torch.Tensor
     nodes_per_graph: torch.Tensor
     edges_per_graph: torch.Tensor
 
@@ -115,10 +122,10 @@ def is_connected(edges: Iterable[Tuple[Hashable, Hashable]], n_nodes: int) -> bo
 
 
 def infinite_graphs(
-    hidden_size: int,
-    n_properties: int,
-    node_distribution: Tuple[float, float],
-    density_distribution: Tuple[float, float],
+    hidden_size: int = 300,
+    n_properties: int = 78,
+    node_distribution: Tuple[float, float] = (16.4, 8.2),
+    density_distribution: Tuple[float, float] = (0.2, 0.4),
 ) -> Iterator[Graph]:
     while True:
         n_nodes = abs(round(random.gauss(*node_distribution)))
@@ -136,9 +143,19 @@ def infinite_graphs(
         yield Graph(node_attrs, edge_index, edge_attrs)
 
 
+def segment_softmax_coo(src: Tensor, index: Tensor, dim: int) -> Tensor:
+    slice_tuple = (slice(None),) * dim + (index,)
+    expand_args = src.size()[:dim] + (-1,)
+    src = src - segment_max_coo(src, index.expand(*expand_args))[0][slice_tuple]
+    exp = torch.exp(src)
+    return exp / segment_sum_coo(exp, index.expand(*expand_args))[slice_tuple]
+
+
 def collate_graphs(
     batch: List[Graph], device: Union[str, torch.device] = "cpu"
 ) -> Batch:
+    if len(batch) == 0:
+        raise ValueError("Batch cannot be an empty list")
     nodes_per_graph = torch.tensor([graph.node_attrs.size(0) for graph in batch])
     edges_per_graph = torch.tensor([graph.edge_attrs.size(0) for graph in batch])
     node_attrs = torch.cat([graph.node_attrs for graph in batch])
@@ -174,3 +191,29 @@ def matmul_memcapped(
     )
     # if chunks == 1: print("no chunking needed", end="")
     return torch.cat([parameter @ T for T in nodes.chunk(chunks, dim=0)], dim=0)
+
+
+def to_snake(name: str):
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+
+
+def to_camel(name: str):
+    return "".join(
+        [
+            word if i == 0 else word.capitalize()
+            for i, word in enumerate(name.split("_"))
+        ]
+    )
+
+
+def split_batch(batch: Batch) -> List[Graph]:
+    node_attrs_list = batch.node_attrs.split(batch.nodes_per_graph.tolist())
+    edge_attrs_list = batch.edge_attrs.split(batch.edges_per_graph.tolist())
+    edge_indices_list = [
+        edge_indices - shift
+        for edge_indices, shift in zip(
+            batch.edge_indices.split(batch.edges_per_graph.tolist(), dim=1),
+            [0, *torch.cumsum(batch.nodes_per_graph, dim=0).tolist()],
+        )
+    ]
+    return list(map(Graph, node_attrs_list, edge_indices_list, edge_attrs_list))

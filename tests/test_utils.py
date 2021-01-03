@@ -4,14 +4,17 @@ import warnings
 from itertools import islice
 
 import torch
+import torch.nn.functional as F
 
 from nsm.utils import (
     Batch,
     Graph,
+    segment_softmax_coo,
     collate_graphs,
     infinite_graphs,
     is_connected,
     matmul_memcapped,
+    split_batch,
 )
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -238,7 +241,7 @@ class BatchTestCase(unittest.TestCase):
         self.assertTrue(all(t.is_cuda for t in vars(batch).values()))
 
 
-class MatmulMemcapped(unittest.TestCase):
+class MatmulMemcappedTestCase(unittest.TestCase):
     def setUp(self) -> None:
         n_props = 10
         hidden = 50
@@ -253,3 +256,56 @@ class MatmulMemcapped(unittest.TestCase):
     def test_output_matches_no_chunking(self) -> None:
         out = matmul_memcapped(self.param, self.nodes, memory_cap=10 ** 9)
         self.assertTrue(self.param.matmul(self.nodes).eq(out).all())
+
+
+class DecollateGraphsTestCase(unittest.TestCase):
+    def test_collate_graphs_inverse(self) -> None:
+        batch_lens = random.sample(range(1, 21), 7)
+        gen = infinite_graphs()
+        for b_len in batch_lens:
+            original_graphs = list(islice(gen, b_len))
+            reconstructed_graphs = split_batch(collate_graphs(original_graphs))
+            self.assertEqual(len(original_graphs), len(reconstructed_graphs))
+
+            for og, ng in zip(original_graphs, reconstructed_graphs):
+                for key in og._fields:
+                    with self.subTest(batch_len=b_len, graph_attr=key):
+                        self.assertTrue((getattr(og, key) == getattr(ng, key)).all())
+
+
+class SegmentSoftmaxCooTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tensors = [torch.rand(random.randrange(5, 20)) for _ in range(10)]
+
+    def test_torch_equivalent(self) -> None:
+        expected = torch.hstack([torch.softmax(t, 0) for t in self.tensors])
+        out = segment_softmax_coo(
+            torch.hstack(self.tensors),
+            torch.repeat_interleave(torch.tensor([t.size(0) for t in self.tensors])),
+            dim=0,
+        )
+        self.assertTrue(torch.allclose(out, expected))
+
+    def test_backward_fn(self) -> None:
+        warnings.filterwarnings("ignore", category=UserWarning)
+        with torch.autograd.detect_anomaly():
+            tensors = [t.requires_grad_() for t in self.tensors]
+            src = torch.hstack(tensors)
+            index = torch.repeat_interleave(torch.tensor([t.size(0) for t in tensors]))
+            out = segment_softmax_coo(src, index, dim=0)
+            self.assertIsNotNone(out.grad_fn)
+            out.sum().backward()
+            for t in tensors:
+                self.assertIsNotNone(t.grad)
+
+    def test_higher_dim(self) -> None:
+        seq_lens = random.sample(range(5, 20), 3)
+        tss = [[torch.rand(l) for l in seq_lens] for _ in range(10)]
+        src = torch.vstack([torch.hstack(ts) for ts in tss])
+        index = torch.repeat_interleave(torch.tensor(seq_lens))
+
+        out = segment_softmax_coo(src, index, dim=1)
+        expected = torch.vstack(
+            [torch.hstack([F.softmax(t, 0) for t in ts]) for ts in tss]
+        )
+        self.assertTrue(torch.allclose(out, expected))

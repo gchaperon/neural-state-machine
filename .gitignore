@@ -2,7 +2,7 @@
 __pycache__
 
 # Data dir
-data/
+data
 
 # Environments
 env/

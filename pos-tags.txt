@@ -1,0 +1,60 @@
+CC
+CD
+DT
+EX
+FW
+IN
+JJ
+JJR
+JJS
+LS
+MD
+NN
+NNS
+NNP
+NNPS
+PDT
+POS
+PRP
+PRP$
+RB
+RBR
+RBS
+RP
+SYM
+TO
+UH
+VB
+VBZ
+VBP
+VBD
+VBN
+VBG
+WDT
+WP
+WP$
+WRB
+
+# Puntuation (posiblemente)
+.
+,
+:
+-RRB-
+-LRB-
+$
+''
+``
+#
+HYPH
+
+// Desconocidos
+GW  // token que provienen de la separacion de una palabra por mala traduccion
+XX  // para palabras que estan incompletas (por ejemplo, para capturar el tartamudeo en text)
+
+AFX  // affix pero sin guion, eg, pro democracia vs pro-democracia
+
+.$$.  // este esta malo?
+
+# Token para web
+NFP  // non final punctuation, como cuando uno pone asteriscos para corregirse, o usa guiones para separar secciones
+ADD  // addresses, links a paginas web

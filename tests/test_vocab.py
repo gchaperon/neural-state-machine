@@ -1,9 +1,9 @@
 import unittest
 
-from nsm.vocab import Glove, Vocab
+from nsm.vocab import GloVe, Vocab
 
 
-class GloveTestCase(unittest.TestCase):
+class GloVeTestCase(unittest.TestCase):
     def test_init_reads_correct_file(self) -> None:
         self.fail("not implemented")
 
