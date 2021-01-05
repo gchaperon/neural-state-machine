@@ -1,16 +1,20 @@
 from stanza.server import CoreNLPClient
 import random
 from tqdm import tqdm
+import torch.utils.data as data
 from nsm.datasets.gqa import (
     GQASceneGraphsOnlyDataset,
     batch_tag,
-    process_scene_graphs,
     SceneGraph,
-    batch_process_scene_graphs,
+    SceneGraphProcessor,
+    batch_process,
+    collate_gqa,
 )
 from pathlib import Path
 from nsm.vocab import GloVe, get_concept_vocab
 from nsm.logging import configure_logging
+from nsm.datasets.utils import SequentialStrSampler, RandomStrSampler
+from nsm.utils import split_batch, collate_graphs
 import ijson
 from itertools import islice
 from functools import partial
@@ -20,12 +24,22 @@ configure_logging()
 
 glove = GloVe()
 concept_vocab = get_concept_vocab(Path("data"))
-with open("data/GQA/sceneGraphs/train_sceneGraphs.json") as f:
-    n = 1000
-    scene_graphs = (
-        SceneGraph(**val) for _, val in tqdm(islice(ijson.kvitems(f, ""), n), total=n)
-    )
-    process_fn = partial(process_scene_graphs, glove=glove, concept_vocab=concept_vocab)
-    batch_size = 100
-    for _ in batch_process_scene_graphs(scene_graphs, process_fn, batch_size):
-        pass
+dset = GQASceneGraphsOnlyDataset(
+    Path("data/GQA"),
+    "train",
+    glove,
+    concept_vocab,
+    Path("data/stanford-corenlp-4.2.0"),
+    "cpu",
+)
+sampler = SequentialStrSampler(dset)
+dloader = data.DataLoader(
+    dset,
+    batch_size=64,
+    sampler=sampler,  # type: ignore [arg-type]
+    num_workers=1,
+    collate_fn=collate_gqa,
+    pin_memory=True,
+)
+for batch in tqdm(dloader):
+    pass

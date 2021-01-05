@@ -82,7 +82,7 @@ class Batch(NamedTuple):
         """ This is really informal, just for debuggin purposes """
         return "Batch:\n" + "\n".join(
             f"    {name}: {'x'.join(map(str, T.size()))}"
-            for name, T in vars(self).items()
+            for name, T in self._asdict().items()
         )
 
 
@@ -144,6 +144,8 @@ def infinite_graphs(
 
 
 def segment_softmax_coo(src: Tensor, index: Tensor, dim: int) -> Tensor:
+    if src.numel() == 0:
+        return src
     slice_tuple = (slice(None),) * dim + (index,)
     expand_args = src.size()[:dim] + (-1,)
     src = src - segment_max_coo(src, index.expand(*expand_args))[0][slice_tuple]
