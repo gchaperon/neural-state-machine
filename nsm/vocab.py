@@ -51,7 +51,6 @@ class GloVe(TTGloVe):
         super(GloVe, self).__init__(name, dim, cache=cache, **kwargs)
         del self.unk_init
 
-    @lru_cache
     def unk_init(self, _):
         """ Return the average of all vectors"""
         return self.vectors.mean(dim=0)

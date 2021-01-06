@@ -153,13 +153,16 @@ def segment_softmax_coo(src: Tensor, index: Tensor, dim: int) -> Tensor:
     return exp / segment_sum_coo(exp, index.expand(*expand_args))[slice_tuple]
 
 
-def collate_graphs(
-    batch: List[Graph], device: Union[str, torch.device] = "cpu"
-) -> Batch:
+def collate_graphs(batch: List[Graph]) -> Batch:
     if len(batch) == 0:
         raise ValueError("Batch cannot be an empty list")
-    nodes_per_graph = torch.tensor([graph.node_attrs.size(0) for graph in batch])
-    edges_per_graph = torch.tensor([graph.edge_attrs.size(0) for graph in batch])
+    device = batch[0].node_attrs.device
+    nodes_per_graph = torch.tensor(
+        [graph.node_attrs.size(0) for graph in batch], device=device
+    )
+    edges_per_graph = torch.tensor(
+        [graph.edge_attrs.size(0) for graph in batch], device=device
+    )
     node_attrs = torch.cat([graph.node_attrs for graph in batch])
     edge_attrs = torch.cat([graph.edge_attrs for graph in batch])
     edge_indices = torch.cat(
@@ -170,11 +173,11 @@ def collate_graphs(
         dim=1,
     )
     return Batch(
-        node_attrs.to(device),
-        edge_indices.to(device),
-        edge_attrs.to(device),
-        nodes_per_graph.to(device),
-        edges_per_graph.to(device),
+        node_attrs,
+        edge_indices,
+        edge_attrs,
+        nodes_per_graph,
+        edges_per_graph,
     )
 
 

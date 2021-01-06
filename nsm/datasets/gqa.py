@@ -178,7 +178,9 @@ class SceneGraphProcessor:
                 edge_attrs_list.append(self.rel_glove_embed(rel))
                 edge_indices_list.append((from_ndx, to_ndx))
         edge_indices = (
-            torch.tensor(list(zip(*edge_indices_list)))
+            torch.tensor(
+                list(zip(*edge_indices_list)), device=self.glove.vectors.device
+            )
             if edge_indices_list
             else torch.randint(1, (2, 0), device=self.glove.vectors.device)
         )
@@ -205,7 +207,9 @@ class SceneGraphProcessor:
             v.vectors for v in self.concept_vocab.grouped_attrs.values()
         ]
         prop_indices = torch.repeat_interleave(
-            torch.tensor([prop.size(0) for prop in node_props])
+            torch.tensor(
+                [prop.size(0) for prop in node_props], device=self.glove.vectors.device
+            )
         )
         extended = batch.node_attrs[
             :,
@@ -416,7 +420,7 @@ class GQASceneGraphsOnlyDataset(data.Dataset[GQAItem]):
                 teed = tee(ijson.kvitems(sgs_file, ""))
                 keys = (k for k, _ in teed[0])
                 graphs = batch_process(
-                    (SceneGraph(**v) for _, v in teed[1]), process_fn, 100
+                    (SceneGraph(**v) for _, v in teed[1]), process_fn, batch_size=100
                 )
 
                 for graph_key, graph in tqdm(
