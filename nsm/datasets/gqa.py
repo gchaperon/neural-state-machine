@@ -1,4 +1,5 @@
 import h5py
+import inspect
 from operator import itemgetter, attrgetter
 import numpy as np
 import torch
@@ -325,6 +326,27 @@ class GQASceneGraphsOnlyDataset(data.Dataset[GQAItem]):
         return self.preprocessed_questions.keys()
 
     @classmethod
+    def splits(cls, *args, **kwargs):
+        init_signature = inspect.signature(cls.__init__)
+        updated = {
+            **dict(
+                zip(
+                    (
+                        p
+                        for p in init_signature.parameters
+                        if p not in ("self", "split")
+                    ),
+                    args,
+                )
+            ),
+            **kwargs,
+        }
+        if "split" in updated:
+            raise ValueError("invalid arg 'split'")
+
+        return cls(**updated, split="train"), cls(**updated, split="val")
+
+    @classmethod
     def _tokenize_remove_punc(
         cls,
         gqa_root: Path,
@@ -441,6 +463,7 @@ class GQASceneGraphsOnlyDataset(data.Dataset[GQAItem]):
         return cache_path
 
     @classmethod
+    @lru_cache
     def get_answer_vocab(cls, gqa_root: Path) -> Vocab:
         cls.check_root_dir(gqa_root)
         q_train_path = gqa_root / cls.resources["questions"]["train"]
@@ -466,6 +489,7 @@ class GQASceneGraphsOnlyDataset(data.Dataset[GQAItem]):
         return vocab
 
     @classmethod
+    @lru_cache
     def get_preprocessing_vocab(
         cls,
         gqa_root: Path,

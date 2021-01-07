@@ -197,14 +197,6 @@ class CollateGraphs(unittest.TestCase):
             self.assertEqual(new_edge_attrs.size(), correct_edge_attrs.size())
             self.assertTrue(new_edge_attrs.eq(correct_edge_attrs).all())
 
-    @unittest.skipIf(not torch.cuda.is_available(), "cuda is not available")
-    def test_collate_cuda(self) -> None:
-        graphs = list(islice(self.graph_gen, 8))
-        batch = collate_graphs(graphs, device="cuda")
-        for key, val in vars(batch).items():
-            with self.subTest(attr=key):
-                self.assertTrue(val.is_cuda)
-
 
 class BatchTestCase(unittest.TestCase):
     def setUp(self) -> None:

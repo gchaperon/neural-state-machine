@@ -3,7 +3,7 @@ import json
 import math
 import random
 from collections import defaultdict, namedtuple
-from functools import cached_property, wraps
+from functools import cached_property, wraps, partial
 from itertools import zip_longest
 from operator import eq
 from pathlib import Path
@@ -76,7 +76,7 @@ class Batch(NamedTuple):
         return indices
 
     def to(self, *args, **kwargs) -> "Batch":
-        return Batch(*[T.to(*args, **kwargs) for T in vars(self).values()])
+        return Batch(*[T.to(*args, **kwargs) for T in self])
 
     def __repr__(self) -> str:
         """ This is really informal, just for debuggin purposes """
@@ -222,3 +222,8 @@ def split_batch(batch: Batch) -> List[Graph]:
         )
     ]
     return list(map(Graph, node_attrs_list, edge_indices_list, edge_attrs_list))
+
+
+class forwardingpartial(partial):
+    def __getattr__(self, attr):
+        return getattr(self.func, attr)

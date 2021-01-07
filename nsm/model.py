@@ -207,7 +207,6 @@ class NSM(nn.Module):
                 relation_similarity,
             )
 
-        # breakpoint()
         aggregated: Tensor = torch.zeros_like(encoded_questions).index_add_(
             0,
             graph_batch.node_indices,
