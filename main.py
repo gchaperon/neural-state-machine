@@ -36,26 +36,18 @@ train_dataset, val_dataset = GQASceneGraphsOnlyDataset.splits(
 )
 
 
-def compute_acc(model, dataset, log_progress=False):
-    loader = data.DataLoader(
-        dataset,
-        batch_size=64,
-        sampler=SequentialStrSampler(dataset),
-        num_workers=1,
-        collate_fn=collate_gqa,
-        pin_memory=True,
-    )
+def compute_acc(model, dataloader, log_progress=False):
+
+
     correct = 0
     with torch.no_grad():
-        device = "cuda" if torch.cuda.is_available() else "cpu"
         model.eval()
-        model.to(device)
-        for batch in tqdm(loader, desc="Evaluating", disable=not log_progress):
+        for batch in tqdm(dataloader, desc="Evaluating", disable=not log_progress):
             graph_batch, question_batch, target = [t.to(device) for t in batch]
             output = model(graph_batch, question_batch)
             correct += torch.sum(output.argmax(1) == target).item()
 
-    return corret / len(dataset)
+    return corret / len(dataloader.dataset)
 
 
 model = NSM(
@@ -74,13 +66,13 @@ property_embeddings = torch.vstack(
     )
 )
 
-acc = compute_acc(
-    forwardingpartial(
-        model,
-        concept_vocabulary=concept_vocab.concepts.vectors,
-        property_embeddings=property_embeddings,
-    ),
+device = "cuda" if torch.cuda.is_available() else "cpu"
+dataloader = data.DataLoader(
     val_dataset,
-    log_progress=True,
+    batch_size=64,
+    sampler=SequentialStrSampler(val_dataset),
+    num_workers=1,
+    collate_fn=collate_gqa,
+    pin_memory=True,
 )
-logging.info(f"accuracy: {acc}")
+

@@ -316,10 +316,10 @@ class GQASceneGraphsOnlyDataset(data.Dataset[GQAItem]):
             )
             return item
 
-    def __len__(self):
+    def __len__(self)->int:
         return len(self.preprocessed_questions)
 
-    def __contains__(self, key):
+    def __contains__(self, key)->bool:
         return key in self.preprocessed_questions
 
     def keys(self) -> KeysView[str]:
@@ -515,9 +515,14 @@ class GQASceneGraphsOnlyDataset(data.Dataset[GQAItem]):
             memory="12G",
             threads=8,
         ) as tagger_client:
+            for i, _ in enumerate(ijson.kvitems(f, "")):
+                pass
+            total_questions = i + 1
+            f.seek(0)
+
             q_iterator = (Question(**q).question for _, q in ijson.kvitems(f, ""))
             tagged_sentences = batch_tag(q_iterator, tagger_client)
-            it = tqdm(tagged_sentences, desc="Reading questions")
+            it = tqdm(tagged_sentences, desc="Reading questions", total=total_questions)
             tokens = (tok for sent in it for tok in process_tagged(sent))
             vocab = Vocab(Counter(tokens), max_size=5000, specials=[])
         vectors = glove.get_vecs_by_tokens(vocab.itos)

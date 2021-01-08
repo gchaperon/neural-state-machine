@@ -258,6 +258,8 @@ class NSM(nn.Module):
                 dim=1,
             ),
             graph_batch.node_indices,
+            dim_size = encoded_questions.size(0)
+
         )
         # B x 2H
         return self.linear(torch.hstack((encoded_questions, aggregated)))

@@ -220,7 +220,7 @@ class BatchTestCase(unittest.TestCase):
 
     @unittest.skipIf(not torch.cuda.is_available(), "cuda is not available")
     def test_properties_cuda(self) -> None:
-        batch = Batch(*map(torch.Tensor.cuda, vars(self.batch).values()))
+        batch = Batch(*map(torch.Tensor.cuda, self.batch))
         props = ["node_indices", "sparse_coo_indices"]
         for prop in props:
             with self.subTest(property=prop):
@@ -229,7 +229,7 @@ class BatchTestCase(unittest.TestCase):
     @unittest.skipIf(not torch.cuda.is_available(), "cuda is not available")
     def test_to(self) -> None:
         batch = self.batch.to("cuda")
-        self.assertTrue(all(t.is_cuda for t in vars(batch).values()))
+        self.assertTrue(all(t.is_cuda for t in batch))
 
 
 class SplitBatchTestCase(unittest.TestCase):

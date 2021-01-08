@@ -30,6 +30,7 @@ import pydantic
 import torch
 from torch import Tensor
 import torch.nn as nn
+from torch.nn.utils.rnn import PackedSequence, pack_sequence
 from torch_scatter import segment_max_coo, segment_sum_coo
 
 
@@ -87,6 +88,9 @@ class Batch(NamedTuple):
             for name, T in self._asdict().items()
         )
 
+
+NSMItem = Tuple[Graph, Tensor, int]
+NSMBatch = Tuple[Batch, PackedSequence, Tensor]
 
 # TODO: terminar esta funcioncita
 # def disk_cache(file_name: str) -> Any:
@@ -150,7 +154,7 @@ def segment_softmax_coo(src: Tensor, index: Tensor, dim: int) -> Tensor:
     return exp / segment_sum_coo(exp, index.expand(*expand_args))[slice_tuple]
 
 
-def collate_graphs(batch: List[Graph]) -> Batch:
+def collate_graphs(batch: Sequence[Graph]) -> Batch:
     if len(batch) == 0:
         raise ValueError("Batch cannot be an empty list")
     device = batch[0].node_attrs.device
@@ -175,6 +179,15 @@ def collate_graphs(batch: List[Graph]) -> Batch:
         edge_attrs,
         nodes_per_graph,
         edges_per_graph,
+    )
+
+
+def collate_nsmitems(batch: List[NSMItem]) -> NSMBatch:
+    graphs, questions, targets = zip(*batch)
+    return (
+        collate_graphs(graphs),
+        pack_sequence(questions, enforce_sorted=False),
+        torch.tensor(targets),
     )
 
 
