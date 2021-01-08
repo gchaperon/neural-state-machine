@@ -13,7 +13,6 @@ from nsm.utils import (
     collate_graphs,
     infinite_graphs,
     is_connected,
-    matmul_memcapped,
     split_batch,
 )
 
@@ -233,24 +232,7 @@ class BatchTestCase(unittest.TestCase):
         self.assertTrue(all(t.is_cuda for t in vars(batch).values()))
 
 
-class MatmulMemcappedTestCase(unittest.TestCase):
-    def setUp(self) -> None:
-        n_props = 10
-        hidden = 50
-        n_nodes = 100
-        self.param = torch.rand(n_props, hidden, hidden)
-        self.nodes = torch.rand(n_nodes, n_props, hidden, 1)
-
-    def test_output_matches_needs_chunking(self) -> None:
-        out = matmul_memcapped(self.param, self.nodes, memory_cap=10 ** 6)
-        self.assertTrue(self.param.matmul(self.nodes).eq(out).all())
-
-    def test_output_matches_no_chunking(self) -> None:
-        out = matmul_memcapped(self.param, self.nodes, memory_cap=10 ** 9)
-        self.assertTrue(self.param.matmul(self.nodes).eq(out).all())
-
-
-class DecollateGraphsTestCase(unittest.TestCase):
+class SplitBatchTestCase(unittest.TestCase):
     def test_collate_graphs_inverse(self) -> None:
         batch_lens = random.sample(range(1, 21), 7)
         gen = infinite_graphs()

@@ -4,11 +4,12 @@ import math
 import random
 from collections import defaultdict, namedtuple
 from functools import cached_property, wraps, partial
-from itertools import zip_longest
+from itertools import zip_longest, chain
 from operator import eq
 from pathlib import Path
 from typing import (
     Any,
+    Protocol,
     Callable,
     Hashable,
     Iterable,
@@ -28,7 +29,8 @@ import re
 import pydantic
 import torch
 from torch import Tensor
-from torch_scatter.segment_coo import segment_max_coo, segment_sum_coo
+import torch.nn as nn
+from torch_scatter import segment_max_coo, segment_sum_coo
 
 
 @pydantic.dataclasses.dataclass
@@ -129,15 +131,10 @@ def infinite_graphs(
 ) -> Iterator[Graph]:
     while True:
         n_nodes = abs(round(random.gauss(*node_distribution)))
-        if n_nodes == 0:
-            # In the GQA dataset there are images that have no objects
-            # in it. I think we should filter those, so i'm doing
-            # the same here
-            continue
         node_attrs = torch.rand(n_nodes, n_properties, hidden_size)
 
         n_edges = abs(round(random.gauss(*density_distribution) * n_nodes ** 2))
-        edge_index = torch.randint(n_nodes, (2, n_edges))
+        edge_index = torch.randint(n_nodes or 1, (2, n_edges))
         edge_attrs = torch.rand(n_edges, hidden_size)
 
         yield Graph(node_attrs, edge_index, edge_attrs)
@@ -181,21 +178,17 @@ def collate_graphs(batch: List[Graph]) -> Batch:
     )
 
 
-def matmul_memcapped(
-    parameter: torch.Tensor, nodes: torch.Tensor, *, memory_cap: int
-) -> torch.Tensor:
-    """
-    This is super specific for my use case
-    Memory cap in bytes
-    Hard to test this one
-    """
-    assert nodes.dtype == parameter.dtype
-    # Get split size
-    chunks = math.ceil(
-        parameter.numel() * nodes.size(0) * parameter.element_size() / memory_cap
-    )
-    # if chunks == 1: print("no chunking needed", end="")
-    return torch.cat([parameter @ T for T in nodes.chunk(chunks, dim=0)], dim=0)
+def split_batch(batch: Batch) -> List[Graph]:
+    node_attrs_list = batch.node_attrs.split(batch.nodes_per_graph.tolist())
+    edge_attrs_list = batch.edge_attrs.split(batch.edges_per_graph.tolist())
+    edge_indices_list = [
+        edge_indices - shift
+        for edge_indices, shift in zip(
+            batch.edge_indices.split(batch.edges_per_graph.tolist(), dim=1),
+            [0, *torch.cumsum(batch.nodes_per_graph, dim=0).tolist()],
+        )
+    ]
+    return list(map(Graph, node_attrs_list, edge_indices_list, edge_attrs_list))
 
 
 def to_snake(name: str):
@@ -211,19 +204,27 @@ def to_camel(name: str):
     )
 
 
-def split_batch(batch: Batch) -> List[Graph]:
-    node_attrs_list = batch.node_attrs.split(batch.nodes_per_graph.tolist())
-    edge_attrs_list = batch.edge_attrs.split(batch.edges_per_graph.tolist())
-    edge_indices_list = [
-        edge_indices - shift
-        for edge_indices, shift in zip(
-            batch.edge_indices.split(batch.edges_per_graph.tolist(), dim=1),
-            [0, *torch.cumsum(batch.nodes_per_graph, dim=0).tolist()],
-        )
-    ]
-    return list(map(Graph, node_attrs_list, edge_indices_list, edge_attrs_list))
-
-
 class forwardingpartial(partial):
     def __getattr__(self, attr):
         return getattr(self.func, attr)
+
+
+class Movable(Protocol):
+    def to(*args, **kwargs) -> Any:
+        ...
+
+
+class partial_module(nn.Module):
+    def __init__(self, module, /, *args: Movable, **kwargs: Movable) -> None:
+        self.module = module
+        self.args = args
+        self.kwargs = kwargs
+
+    def forward(self, *args, **kwargs):
+        device = next(self.module.parameters()).device
+        merged_args = [arg.to(device) for arg in chain(self.args, args)]
+        merged_kwargs = {
+            key: kwarg.to(device)
+            for key, kwarg in chain(self.kwargs.items(), kwargs.items())
+        }
+        return self.module(*merged_args, **merged_kwargs)

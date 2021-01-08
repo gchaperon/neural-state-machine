@@ -5,8 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 from torch.nn.utils.rnn import PackedSequence, pad_packed_sequence
-
-from nsm.utils import Batch, matmul_memcapped
+from torch_scatter import scatter_sum, segment_sum_coo
+from nsm.utils import Batch, segment_softmax_coo
 
 
 class Tagger(nn.Module):
@@ -106,56 +106,74 @@ class NSMCell(nn.Module):
         node_prop_similarities: Tensor,
         relation_similarity: Tensor,
     ) -> Tensor:
+        """
+        Dimensions:
+            graph_batch:
+                node_attrs:         N x P x H
+                edge_indices:       2 x E
+                edge_attrs:         E x H
+            instruction_batch:      B x H
+            distribution:           N
+            node_prop_similarities: B x P
+            relation_similarity:    B
+        Legend:
+            N: Total number of nodes
+            P: Number of node properties
+            H: Hidde/input size (glove size)
+            E: Total number of edges
+            B: Batch size
+        """
         # Compute node and edge score
+        # N x H
         node_scores = F.elu(
             torch.sum(
-                node_prop_similarities[graph_batch.node_indices, :, None]
-                * instruction_batch[graph_batch.node_indices, None]
-                * matmul_memcapped(
-                    self.weight_node_properties,
-                    graph_batch.node_attrs.unsqueeze(-1),
-                    # 8 gigs memory cap
-                    memory_cap=5 * 10 ** 9,
-                ).squeeze(),
-                dim=1,
+                # P x N x 1
+                node_prop_similarities.T[:, graph_batch.node_indices, None]
+                # N x H
+                * instruction_batch[graph_batch.node_indices]
+                # P x N x H
+                * graph_batch.node_attrs.transpose(0, 1)
+                # P x H x H
+                @ self.weight_node_properties,
+                dim=0,
             )
         )
+        # E x H
         edge_scores = F.elu(
+            # E x H
             instruction_batch[graph_batch.edge_batch_indices]
-            * self.weight_edge.matmul(graph_batch.edge_attrs.unsqueeze(-1)).squeeze()
+            # E x H
+            * graph_batch.edge_attrs
+            # H x H
+            @ self.weight_edge
         )
         # Compute state component for next distribution
-        next_distribution_states = (
-            torch.sparse.softmax(
-                torch.sparse_coo_tensor(
-                    graph_batch.sparse_coo_indices,
-                    self.weight_node_score @ node_scores.T,
-                ),
-                dim=1,
-            )
-            .coalesce()
-            .values()
+        # N
+        next_distribution_states = segment_softmax_coo(
+            # N x H       H
+            node_scores @ self.weight_node_score,
+            graph_batch.node_indices,
+            dim=0,
         )
         # Compute neighbour component for next distribution
-        next_distribution_relations = (
-            torch.sparse.softmax(
-                torch.sparse_coo_tensor(
-                    graph_batch.sparse_coo_indices,
-                    self.weight_relation_score
-                    @ torch.zeros_like(node_scores)
-                    .index_add_(
-                        0,
-                        graph_batch.edge_indices[1],
-                        distribution[graph_batch.edge_indices[0], None] * edge_scores,
-                    )
-                    .T,
-                ),
-                dim=1,
+        # N
+        next_distribution_relations = segment_softmax_coo(
+            # N x H
+            scatter_sum(
+                # E x 1                                           E x H
+                distribution[graph_batch.edge_indices[0], None] * edge_scores,
+                graph_batch.edge_indices[1],
+                dim=0,
+                dim_size=graph_batch.node_indices.size(0),
             )
-            .coalesce()
-            .values()
+            # H
+            @ self.weight_relation_score,
+            graph_batch.node_indices,
+            dim=0,
         )
+
         # Compute next distribution
+        # N
         next_distribution = (
             relation_similarity[graph_batch.node_indices] * next_distribution_relations
             + (1 - relation_similarity[graph_batch.node_indices])
@@ -187,18 +205,42 @@ class NSM(nn.Module):
         # Last property embedding must be the relation
         property_embeddings: Tensor,
     ) -> torch.Tensor:
-
+        """
+        Dimensions:
+            graph_batch:
+                node_attrs: N x P x H
+                edge_indices: 2 x E
+                edge_attrs: E x H
+            question_batch: B x L* x H
+            concept_vocab: C x H
+            property_embeddings: D x H
+        Legend:
+            N: Total number of nodes
+            P: Number of node properties
+            H: Hidden size (glove size)
+            E: Total number of edges
+            B: Batch size
+            C: Number of concepts
+            D = P + 1: Number of properties (concept categories)
+            L*: Question length, variable, see PackedSequence docs for more info
+            I: Computation steps
+        """
+        # B x I x H,  B x H
         instructions, encoded_questions = self.instructions_model(
             concept_vocabulary, question_batch
         )
         # Initialize distribution
+        # N
         distribution = (1 / graph_batch.nodes_per_graph)[graph_batch.node_indices]
         # Simulate execution of finite automaton
-        for instruction_batch in instructions.transpose(0, 1):
+        # B x H
+        for instruction_batch in instructions.unbind(1):
             # Property similarities, denoted by a capital R in the paper
+            # B x P,                B
             node_prop_similarities, relation_similarity = (
                 foo := F.softmax(instruction_batch @ property_embeddings.T, dim=1)
             )[:, :-1], foo[:, -1]
+            # N
             distribution = self.nsm_cell(
                 graph_batch,
                 instruction_batch,
@@ -207,14 +249,15 @@ class NSM(nn.Module):
                 relation_similarity,
             )
 
-        aggregated: Tensor = torch.zeros_like(encoded_questions).index_add_(
-            0,
-            graph_batch.node_indices,
+        # B x H
+        aggregated = segment_sum_coo(
             distribution[:, None]
             * torch.sum(
                 node_prop_similarities[graph_batch.node_indices, :, None]
                 * graph_batch.node_attrs,
                 dim=1,
             ),
+            graph_batch.node_indices,
         )
+        # B x 2H
         return self.linear(torch.hstack((encoded_questions, aggregated)))

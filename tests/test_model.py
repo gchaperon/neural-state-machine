@@ -21,8 +21,6 @@ from nsm.model import (
 )
 from nsm.utils import collate_graphs, infinite_graphs
 
-warnings.simplefilter("ignore", category=UserWarning)
-
 
 class TaggerTestCase(unittest.TestCase):
     def setUp(self) -> None:
@@ -229,7 +227,9 @@ class NSMCellTestCase(unittest.TestCase):
 
     @unittest.skipIf(not torch.cuda.is_available(), "cuda is not available")
     def test_backward_simple_cuda(self) -> None:
-        warnings.simplefilter("ignore", category=UserWarning)
+        warnings.filterwarnings(
+            "ignore", message="Anomaly Detection", category=UserWarning
+        )
         with torch.autograd.detect_anomaly():
             dev = torch.device("cuda")
             model = self.model.to(dev)
@@ -247,7 +247,7 @@ class NSMCellTestCase(unittest.TestCase):
 
 class NSMTestCase(unittest.TestCase):
     def setUp(self) -> None:
-        # These tests should be unsing expected dimensions
+        # These tests should be using expected dimensions
         self.batch_size = 64
         self.output_size = 2000
         n_node_properties = 78
@@ -286,7 +286,6 @@ class NSMTestCase(unittest.TestCase):
             )
         )
 
-    @unittest.skipUnless("RUN_LONGASS_TESTS" in os.environ, "I warned you")
     def test_output_shape(self) -> None:
         output = self.model(
             self.graph_batch, self.question_batch, self.vocab, self.prop_embeds
