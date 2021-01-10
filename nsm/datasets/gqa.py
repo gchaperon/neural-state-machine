@@ -8,8 +8,8 @@ import torch.utils.data as data
 import torch.nn.functional as F
 from torch import Tensor
 from nsm.vocab import Vocab, GloVe, PUNC_POSTAGS, ConceptVocab
-from nsm.utils import collate_graphs, split_batch, segment_softmax_coo, Batch
-from torch_scatter.segment_coo import segment_sum_coo
+from nsm.utils import collate_graphs, split_batch, scatter_softmax, Batch
+from torch_scatter import scatter_sum
 from pathlib import Path
 import json
 from typing import (
@@ -218,14 +218,15 @@ class SceneGraphProcessor:
                 torch.tensor([len(node_props[0]), sum(map(len, node_props[1:]))])
             ),
         ]
-        prop_probs = segment_softmax_coo(
+        prop_probs = scatter_softmax(
             torch.sum(extended * torch.vstack(node_props), dim=2),
             prop_indices,
             dim=1,
         )
-        processed_node_attrs = segment_sum_coo(
+        processed_node_attrs = scatter_sum(
             prop_probs[..., None] * torch.vstack(node_props),
-            prop_indices.expand(batch.node_attrs.size(0), -1),
+            prop_indices,
+            dim=1,
         )
         processed_edge_attrs = (
             batch.edge_attrs.matmul(self.concept_vocab.relations.vectors.T)
@@ -316,10 +317,10 @@ class GQASceneGraphsOnlyDataset(data.Dataset[GQAItem]):
             )
             return item
 
-    def __len__(self)->int:
+    def __len__(self) -> int:
         return len(self.preprocessed_questions)
 
-    def __contains__(self, key)->bool:
+    def __contains__(self, key) -> bool:
         return key in self.preprocessed_questions
 
     def keys(self) -> KeysView[str]:

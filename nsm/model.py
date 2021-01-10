@@ -5,8 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 from torch.nn.utils.rnn import PackedSequence, pad_packed_sequence
-from torch_scatter import scatter_sum, segment_sum_coo
-from nsm.utils import Batch, segment_softmax_coo
+from torch_scatter import scatter_sum
+from nsm.utils import Batch, scatter_softmax
 
 
 class Tagger(nn.Module):
@@ -149,7 +149,7 @@ class NSMCell(nn.Module):
         )
         # Compute state component for next distribution
         # N
-        next_distribution_states = segment_softmax_coo(
+        next_distribution_states = scatter_softmax(
             # N x H       H
             node_scores @ self.weight_node_score,
             graph_batch.node_indices,
@@ -157,7 +157,7 @@ class NSMCell(nn.Module):
         )
         # Compute neighbour component for next distribution
         # N
-        next_distribution_relations = segment_softmax_coo(
+        next_distribution_relations = scatter_softmax(
             # N x H
             scatter_sum(
                 # E x 1                                           E x H
@@ -250,7 +250,7 @@ class NSM(nn.Module):
             )
 
         # B x H
-        aggregated = segment_sum_coo(
+        aggregated = scatter_sum(
             distribution[:, None]
             * torch.sum(
                 node_prop_similarities[graph_batch.node_indices, :, None]
@@ -258,8 +258,8 @@ class NSM(nn.Module):
                 dim=1,
             ),
             graph_batch.node_indices,
-            dim_size = encoded_questions.size(0)
-
+            dim=0,
+            dim_size=encoded_questions.size(0),
         )
         # B x 2H
         return self.linear(torch.hstack((encoded_questions, aggregated)))

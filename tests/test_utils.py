@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from nsm.utils import (
     Batch,
     Graph,
-    segment_softmax_coo,
+    scatter_softmax,
     collate_graphs,
     infinite_graphs,
     is_connected,
@@ -247,13 +247,13 @@ class SplitBatchTestCase(unittest.TestCase):
                         self.assertTrue((getattr(og, key) == getattr(ng, key)).all())
 
 
-class SegmentSoftmaxCooTestCase(unittest.TestCase):
+class ScatterSoftmaxTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.tensors = [torch.rand(random.randrange(5, 20)) for _ in range(10)]
 
     def test_torch_equivalent(self) -> None:
         expected = torch.hstack([torch.softmax(t, 0) for t in self.tensors])
-        out = segment_softmax_coo(
+        out = scatter_softmax(
             torch.hstack(self.tensors),
             torch.repeat_interleave(torch.tensor([t.size(0) for t in self.tensors])),
             dim=0,
@@ -266,7 +266,7 @@ class SegmentSoftmaxCooTestCase(unittest.TestCase):
             tensors = [t.requires_grad_() for t in self.tensors]
             src = torch.hstack(tensors)
             index = torch.repeat_interleave(torch.tensor([t.size(0) for t in tensors]))
-            out = segment_softmax_coo(src, index, dim=0)
+            out = scatter_softmax(src, index, dim=0)
             self.assertIsNotNone(out.grad_fn)
             out.sum().backward()
             for t in tensors:
@@ -278,7 +278,7 @@ class SegmentSoftmaxCooTestCase(unittest.TestCase):
         src = torch.vstack([torch.hstack(ts) for ts in tss])
         index = torch.repeat_interleave(torch.tensor(seq_lens))
 
-        out = segment_softmax_coo(src, index, dim=1)
+        out = scatter_softmax(src, index, dim=1)
         expected = torch.vstack(
             [torch.hstack([F.softmax(t, 0) for t in ts]) for ts in tss]
         )

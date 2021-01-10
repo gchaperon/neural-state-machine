@@ -16,7 +16,7 @@ from pathlib import Path
 from nsm.vocab import GloVe, get_concept_vocab
 from nsm.logging import configure_logging
 from nsm.datasets.utils import SequentialStrSampler, RandomStrSampler
-from nsm.utils import split_batch, collate_graphs, forwardingpartial
+from nsm.utils import split_batch, collate_graphs, forwardingpartial, partial_module
 import ijson
 from itertools import islice
 from functools import partial
@@ -37,13 +37,11 @@ train_dataset, val_dataset = GQASceneGraphsOnlyDataset.splits(
 
 
 def compute_acc(model, dataloader, log_progress=False):
-
-
     correct = 0
     with torch.no_grad():
         model.eval()
         for batch in tqdm(dataloader, desc="Evaluating", disable=not log_progress):
-            graph_batch, question_batch, target = [t.to(device) for t in batch]
+            graph_batch, question_batch, target = [el.to(device) for el in batch]
             output = model(graph_batch, question_batch)
             correct += torch.sum(output.argmax(1) == target).item()
 
@@ -69,10 +67,20 @@ property_embeddings = torch.vstack(
 device = "cuda" if torch.cuda.is_available() else "cpu"
 dataloader = data.DataLoader(
     val_dataset,
-    batch_size=64,
+    batch_size=128,
     sampler=SequentialStrSampler(val_dataset),
     num_workers=1,
     collate_fn=collate_gqa,
     pin_memory=True,
 )
-
+for _ in tqdm(dataloader):
+    pass
+acc = compute_acc(
+    partial_module(
+        model,
+        property_embeddings=property_embeddings,
+        concept_vocabulary=concept_vocab.concepts.vectors,
+    ),
+    dataloader,
+    log_progress=True,
+)

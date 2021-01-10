@@ -24,6 +24,7 @@ from typing import (
     TypeVar,
     Union,
     NamedTuple,
+    Optional,
 )
 import re
 import pydantic
@@ -31,7 +32,7 @@ import torch
 from torch import Tensor
 import torch.nn as nn
 from torch.nn.utils.rnn import PackedSequence, pack_sequence
-from torch_scatter import segment_max_coo, segment_sum_coo
+from torch_scatter import scatter_max, scatter_sum
 
 
 @pydantic.dataclasses.dataclass
@@ -144,14 +145,16 @@ def infinite_graphs(
         yield Graph(node_attrs, edge_index, edge_attrs)
 
 
-def segment_softmax_coo(src: Tensor, index: Tensor, dim: int) -> Tensor:
+def scatter_softmax(
+    src: Tensor, index: Tensor, dim: int, dim_size: Optional[int] = None
+) -> Tensor:
     if src.numel() == 0:
         return src
     slice_tuple = (slice(None),) * dim + (index,)
     expand_args = src.size()[:dim] + (-1,)
-    src = src - segment_max_coo(src, index.expand(*expand_args))[0][slice_tuple]
+    src = src - scatter_max(src, index, dim, dim_size=dim_size)[0][slice_tuple]
     exp = torch.exp(src)
-    return exp / segment_sum_coo(exp, index.expand(*expand_args))[slice_tuple]
+    return exp / scatter_sum(exp, index, dim, dim_size=dim_size)[slice_tuple]
 
 
 def collate_graphs(batch: Sequence[Graph]) -> Batch:
@@ -222,13 +225,9 @@ class forwardingpartial(partial):
         return getattr(self.func, attr)
 
 
-class Movable(Protocol):
-    def to(*args, **kwargs) -> Any:
-        ...
-
-
 class partial_module(nn.Module):
-    def __init__(self, module, /, *args: Movable, **kwargs: Movable) -> None:
+    def __init__(self, module, /, *args, **kwargs):
+        super(partial_module, self).__init__()
         self.module = module
         self.args = args
         self.kwargs = kwargs
