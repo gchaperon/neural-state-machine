@@ -1,8 +1,6 @@
 pydantic==1.7.2
--f https://download.pytorch.org/whl/torch_stable.html
-torch==1.7.1+cu110
 torchtext==0.8.1
 ijson==3.1.3
 stanza==1.1.1
 h5py==3.1.0
-Requirement already satisfied: mypy-extensions in ./env/lib/python3.8/site-packages (0.4.3)
+orjson==3.4.6

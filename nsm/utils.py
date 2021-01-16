@@ -90,15 +90,15 @@ class Batch(NamedTuple):
         )
 
 
+# Graph, defined above. Tensor of dimension LxH, where L is the number of tokens
+# and H is the hidden size of the network (glove size). int corresponds to the index of
+# the answer token (coming from the vocab of the dataset)
 NSMItem = Tuple[Graph, Tensor, int]
+# Batch, as defined above. PackedSequence is a nice way of managing variable-length
+# sequences and the last item (Tensor) is the batch of targets, should be a LongTensor
+# (or equivalent)
 NSMBatch = Tuple[Batch, PackedSequence, Tensor]
 
-# TODO: terminar esta funcioncita
-# def disk_cache(file_name: str) -> Any:
-#    def deco(f):
-#        @wraps(f)
-#        def wrapper(*args, **kwargs):
-#            pass
 
 
 def is_connected(edges: Iterable[Tuple[Hashable, Hashable]], n_nodes: int) -> bool:

@@ -81,6 +81,18 @@ class ConceptVocab:
             out.extend(vocab)
         return out
 
+    @property
+    def property_embeddings(self):
+        out = torch.vstack(
+            (
+                self.objects.vectors.mean(0),
+                self.attr_types.vectors,
+                self.relations.vectors.mean(0),
+            )
+        )
+        assert out.size(0) == len(self.grouped_attrs) + 2
+        return out
+
     def to(self, *args):
         for vocab in self.grouped_attrs.values():
             vocab.vectors = vocab.vectors.to(*args)

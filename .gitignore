@@ -14,3 +14,6 @@ htmlcov/
 
 # mypy
 .mypy_cache/
+
+# tensorboard runs
+runs/
