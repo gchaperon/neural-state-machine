@@ -480,25 +480,15 @@ class GQASceneGraphsOnlyDataset(data.Dataset[NSMItem]):
         return self.tagger_processed_qs.keys()
 
     @classmethod
-    def splits(cls, *args, **kwargs):
-        init_signature = inspect.signature(cls.__init__)
-        updated = {
-            **dict(
-                zip(
-                    (
-                        p
-                        for p in init_signature.parameters
-                        if p not in ("self", "split")
-                    ),
-                    args,
-                )
-            ),
-            **kwargs,
-        }
-        if "split" in updated:
-            raise ValueError("invalid arg 'split'")
-
-        return cls(**updated, split="train"), cls(**updated, split="val")
+    def splits(
+        cls,
+        gqa_root: Path,
+        glove: GloVe,
+        concept_vocab: ConceptVocab,
+        corenlp_root: Path,
+    ) -> Tuple[GQASceneGraphsOnlyDataset, GQASceneGraphsOnlyDataset]:
+        first, *rest = [gqa_root, glove, concept_vocab, corenlp_root]
+        return cls(first, "train", *rest), cls(first, "val", *rest)  # type:ignore
 
     @classmethod
     @lru_cache

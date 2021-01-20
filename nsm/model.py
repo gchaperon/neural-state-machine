@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union, Callable
 
 import torch
 import torch.nn as nn
@@ -40,8 +40,15 @@ class InstructionDecoder(nn.Module):
         self.rnn_cell = nn.RNNCell(input_size, hidden_size, bias, nonlinearity)
 
     def forward(self, input: Tensor) -> Tensor:
+        """
+        Dimensions:
+            B: Batch size
+            H: Hidden size (glove size)
+            I: Number of instructions
+        """
         # Explicit better than implicit, amarite (?)
         hx: torch.Tensor = torch.zeros_like(input)
+        # [B x H, ...]
         hiddens: List[Tensor] = []
         for _ in range(self.n_instructions):
             hx = self.rnn_cell(input, hx)
@@ -88,8 +95,14 @@ class InstructionsModel(nn.Module):
 
 
 class NSMCell(nn.Module):
-    def __init__(self, input_size: int, n_node_properties: int) -> None:
+    def __init__(
+        self,
+        input_size: int,
+        n_node_properties: int,
+        nonlinearity: Optional[Callable[[Tensor], Tensor]] = None,
+    ) -> None:
         super(NSMCell, self).__init__()
+        self.nonlinearity = nonlinearity or F.elu
 
         self.weight_node_properties = nn.Parameter(
             torch.rand(n_node_properties, input_size, input_size)
@@ -125,7 +138,7 @@ class NSMCell(nn.Module):
         """
         # Compute node and edge score
         # N x H
-        node_scores = F.elu(
+        node_scores = self.nonlinearity(
             torch.sum(
                 # P x N x 1
                 node_prop_similarities.T[:, graph_batch.node_indices, None]
@@ -139,7 +152,7 @@ class NSMCell(nn.Module):
             )
         )
         # E x H
-        edge_scores = F.elu(
+        edge_scores = self.nonlinearity(
             # E x H
             instruction_batch[graph_batch.edge_batch_indices]
             # E x H
@@ -182,6 +195,29 @@ class NSMCell(nn.Module):
         return next_distribution
 
 
+class AnswerClassifier(nn.Module):
+    def __init__(
+        self,
+        input_size: int,
+        output_size: int,
+        nonlinearity: Optional[Callable[[Tensor], Tensor]] = None,
+        dropout: float = 0.0,
+    ):
+        super(AnswerClassifier, self).__init__()
+        self.dropout = nn.Dropout(dropout)
+        self.nonlinearity = nonlinearity or F.elu
+        self.fc_layers = nn.ModuleList(
+            [nn.Linear(input_size, input_size), nn.Linear(input_size, output_size)]
+        )
+
+    def forward(self, input: Tensor):
+        z = self.fc_layers[0](input)
+        z = self.nonlinearity(z)
+        z = self.dropout(z)
+        z = self.fc_layers[1](z)
+        return z
+
+
 class NSM(nn.Module):
     def __init__(
         self,
@@ -189,13 +225,15 @@ class NSM(nn.Module):
         n_node_properties: int,
         computation_steps: int,
         output_size: int,
+        dropout: float = 0.0,
     ) -> None:
         super(NSM, self).__init__()
+        self.dropout = nn.Dropout(dropout)
         self.instructions_model = InstructionsModel(
-            input_size, n_instructions=computation_steps
+            input_size, n_instructions=computation_steps + 1
         )
         self.nsm_cell = NSMCell(input_size, n_node_properties)
-        self.linear = nn.Linear(2 * input_size, output_size)
+        self.classifier = AnswerClassifier(2 * input_size, output_size, dropout=dropout)
 
     def forward(
         self,
@@ -225,16 +263,22 @@ class NSM(nn.Module):
             L*: Question length, variable, see PackedSequence docs for more info
             I: Computation steps
         """
-        # B x I x H,  B x H
+        # B x (I + 1) x H,  B x H
         instructions, encoded_questions = self.instructions_model(
             concept_vocabulary, question_batch
+        )
+        # Apply dropout to state and edge representations
+        graph_batch = graph_batch._replace(
+            node_attrs=self.dropout(graph_batch.node_attrs),
+            edge_attrs=self.dropout(graph_batch.edge_attrs),
         )
         # Initialize distribution
         # N
         distribution = (1 / graph_batch.nodes_per_graph)[graph_batch.node_indices]
         # Simulate execution of finite automaton
         # B x H
-        for instruction_batch in instructions.unbind(1):
+        for instruction_batch in instructions[:, :-1].unbind(1):
+            # TODO: maybe do these all at once?
             # Property similarities, denoted by a capital R in the paper
             # B x P,                B
             node_prop_similarities, relation_similarity = (
@@ -249,6 +293,10 @@ class NSM(nn.Module):
                 relation_similarity,
             )
 
+        # B x P
+        node_prop_similarities = F.softmax(
+            instructions[:, -1] @ property_embeddings.T, dim=1
+        )[:, :-1]
         # B x H
         aggregated = scatter_sum(
             distribution[:, None]
@@ -262,4 +310,4 @@ class NSM(nn.Module):
             dim_size=encoded_questions.size(0),
         )
         # B x 2H
-        return self.linear(torch.hstack((encoded_questions, aggregated)))
+        return self.classifier(torch.hstack((encoded_questions, aggregated)))

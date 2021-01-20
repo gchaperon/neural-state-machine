@@ -62,7 +62,7 @@ class TaggerTestCase(unittest.TestCase):
 
 class InstructionDecoderTestCase(unittest.TestCase):
     def setUp(self) -> None:
-        self.n_instructions = 8
+        self.n_instructions = 9
         self.batch_size = 64
         self.input_size = 300
         # for each question in the batch there is a vector representing it
@@ -93,7 +93,7 @@ class InstructionDecoderTestCase(unittest.TestCase):
 
 class InstructionsModelTestCase(unittest.TestCase):
     def setUp(self) -> None:
-        self.n_instructions = 8
+        self.n_instructions = 9
         self.embedding_size = 300
         self.batch_size = 64
         vocab_len = 1335

@@ -1,6 +1,6 @@
 import torch
 import torch.utils.data as data
-from typing import Protocol, Any, KeysView, Sized, Iterator
+from typing import Protocol, Any, KeysView, Sized, Iterator, Callable, Optional
 
 
 class StrMapProto(Protocol, Sized):
@@ -20,6 +20,14 @@ class _BaseStrSampler(data.Sampler[str]):
     def __len__(self) -> int:
         return len(self.data_source)
 
+
+class SortedStrSampler(_BaseStrSampler):
+    def __init__(self, data_source, *, key:Optional[Callable]=None, reverse:bool=False):
+        super(SortedStrSampler, self).__init__(data_source)
+        self.sorted_keys = sorted(self.data_source.keys(), key=key, reverse=reverse)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.sorted_keys)
 
 class SequentialStrSampler(_BaseStrSampler):
     def __iter__(self) -> Iterator[str]:
