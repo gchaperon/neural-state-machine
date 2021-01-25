@@ -1,4 +1,5 @@
 from stanza.server import CoreNLPClient
+from operator import eq
 import random
 from tqdm import tqdm
 import torch
@@ -12,13 +13,11 @@ from nsm.datasets.gqa import (
     SceneGraph,
     SceneGraphProcessor,
 )
-from nsm.datasets.utils import SortedStrSampler, SequentialStrSampler, RandomStrSampler
 from nsm.model import NSM
 from pathlib import Path
 from nsm.vocab import GloVe, get_concept_vocab
 from nsm.logging import configure_logging
-from nsm.datasets.utils import SequentialStrSampler, RandomStrSampler
-from nsm.config import get_config
+from nsm.config import get_config, get_args
 from nsm.utils import (
     split_batch,
     collate_graphs,
@@ -36,29 +35,34 @@ import datetime as dt
 import argparse
 import pickle
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--skip-train", dest="train", action="store_false")
-args = parser.parse_args()
-
 configure_logging()
 logger = logging.getLogger()
-config = get_config("model_config.toml")
 
+args = get_args()
+config = get_config(args)
+logger.info(f"Config: {config}")
 
 glove = GloVe(dim=config.glove_dim)
-concept_vocab = get_concept_vocab(config.data_path)
-train_set = GQASceneGraphsOnlyDataset(
+concept_vocab = get_concept_vocab(config.data_path, config.glove_dim)
+# DATASET
+gqa_train = GQASceneGraphsOnlyDataset(
     config.data_path / "GQA",
     "train",
     glove,
     concept_vocab,
     config.data_path / "stanford-corenlp-4.2.0",
 )
+train_set = data.Subset(
+    dataset=gqa_train,
+    indices=random.sample(
+        range(len(gqa_train)), k=int(config.subset_size * len(gqa_train))
+    ),
+)
 
 train_loader = data.DataLoader(
     train_set,
     batch_size=config.batch_size,
-    sampler=RandomStrSampler(train_set),  # type: ignore [arg-type]
+    shuffle=True,
     num_workers=min(6, len(os.sched_getaffinity(0))),
     collate_fn=collate_nsmitems,
 )
@@ -72,7 +76,7 @@ model = NSM(
     input_size=config.glove_dim,
     n_node_properties=len(concept_vocab.grouped_attrs) + 1,
     computation_steps=config.computation_steps,
-    output_size=len(train_set.answer_vocab),
+    output_size=len(gqa_train.answer_vocab),
     dropout=config.dropout,
 ).to(device)
 # this should free some space
@@ -84,7 +88,10 @@ optimizer = optim.Adam(model.parameters(), lr=config.learn_rate)
 checkpoints_path = config.data_path / "checkpoints"
 
 if args.train:
-    tb_writer = tb.SummaryWriter()
+    tb_comment = "__".join(
+        f"{k}={v}" for k, v in vars(args).items() if v and k in config.__fields__
+    )
+    tb_writer = tb.SummaryWriter(comment= tb_comment)
     for epoch in tqdm(range(config.epochs), desc="Epoch"):
         for global_step, batch in enumerate(
             tqdm(train_loader, desc="Batch"), start=epoch * len(train_loader)
@@ -120,7 +127,7 @@ model.load_state_dict(
 train_eval_loader = data.DataLoader(
     train_set,
     batch_size=config.batch_size,
-    sampler=SortedStrSampler(train_set),  # type: ignore [arg-type]
+    shuffle=False,
     num_workers=min(6, len(os.sched_getaffinity(0))),
     collate_fn=collate_nsmitems,
 )
@@ -134,13 +141,10 @@ with torch.no_grad():
         all_targets += targets.tolist()
         predicted += out.argmax(1).tolist()
 
-breakpoint()
 with open(config.data_path / "all_targets.pkl", "wb") as f1, open(
     config.data_path / "predicted.pkl", "wb"
 ) as f2:
     pickle.dump(all_targets, f1)
     pickle.dump(predicted, f2)
 
-logger.info(
-    f"Train acc: {sum(t == p for t, p in zip(all_targets, predicted))/len(train_set):.2%}"
-)
+logger.info(f"Train acc: {sum(map(eq, all_targets, predicted))/len(train_set):.2%}")

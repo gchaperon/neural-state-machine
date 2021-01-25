@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os
 import h5py
 import orjson
@@ -384,6 +385,7 @@ class GQASceneGraphsOnlyDataset(data.Dataset[NSMItem]):
     root_path: Path
     split: Literal["train", "val"]
     tagger_processed_qs: Dict[str, TDTaggerProcessed]
+    question_keys: List[str]
     scene_graphs: Dict[str, TDSceneGraph]
     preprocessing_vocab: Vocab
     answer_vocab: Vocab
@@ -406,10 +408,30 @@ class GQASceneGraphsOnlyDataset(data.Dataset[NSMItem]):
             self.scene_graphs.values(), glove, concept_vocab
         )
         self.tagger_processed_qs = self._get_tagger_processed(tagger_root=corenlp_root)
+        self.question_keys = sorted(self.tagger_processed_qs.keys())
         self.preprocessing_vocab = self.get_preprocessing_vocab(
             gqa_root, glove, corenlp_root
         )
         self.answer_vocab = self.get_answer_vocab(gqa_root)
+
+    def __getitem__(self, ndx: int) -> NSMItem:
+        question = self.tagger_processed_qs[self.question_keys[ndx]]
+        graph = self.processor.process(self.scene_graphs[question["imageId"]])
+        embedded_q = torch.stack(
+            [
+                self.preprocessing_vocab.vectors[self.preprocessing_vocab.stoi[tok]]
+                for tok in question["question"]
+                if tok in self.preprocessing_vocab
+            ]
+        )
+        target = self.answer_vocab.stoi[question["answer"]]
+        return graph, embedded_q, target
+
+    def __len__(self) -> int:
+        return len(self.question_keys)
+
+    def __contains__(self, key) -> bool:
+        return key in self.question_keys
 
     def _get_scene_graphs(self) -> Dict[str, TDSceneGraph]:
         # Caching is useful here only because the raw scene graphs contain
@@ -457,27 +479,6 @@ class GQASceneGraphsOnlyDataset(data.Dataset[NSMItem]):
         processed = load_processed_questions(questions_path, cache_path, tagger_root)
         return dict(processed)
 
-    def __getitem__(self, key: str) -> NSMItem:
-        question = self.tagger_processed_qs[key]
-        graph = self.processor.process(self.scene_graphs[question["imageId"]])
-        embedded_q = torch.stack(
-            [
-                self.preprocessing_vocab.vectors[self.preprocessing_vocab.stoi[tok]]
-                for tok in question["question"]
-                if tok in self.preprocessing_vocab
-            ]
-        )
-        target = self.answer_vocab.stoi[question["answer"]]
-        return graph, embedded_q, target
-
-    def __len__(self) -> int:
-        return len(self.tagger_processed_qs)
-
-    def __contains__(self, key) -> bool:
-        return key in self.tagger_processed_qs
-
-    def keys(self) -> KeysView[str]:
-        return self.tagger_processed_qs.keys()
 
     @classmethod
     def splits(

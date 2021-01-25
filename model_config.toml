@@ -5,3 +5,4 @@ computation_steps = 8
 dropout           = 0.0
 glove_dim         = 300
 data_path         = "data"
+subset_size       = 1.0

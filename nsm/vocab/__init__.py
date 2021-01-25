@@ -105,7 +105,7 @@ class ConceptVocab:
 
 @lru_cache
 def get_concept_vocab(
-    data_path: Path, glove_size: Literal[50, 100, 200, 300] = 300
+    data_path: Path, glove_size: Literal[50, 100, 200, 300]
 ) -> ConceptVocab:
     logger.info("loading concept vocab")
     cache_path = data_path / "vgLists" / "cache" / f"concept_vocab_{glove_size}.pt"
@@ -122,12 +122,12 @@ def get_concept_vocab(
 
 
 def _get_concept_vocab(
-    data_path: Path, glove_size: Literal[50, 100, 200, 300] = 300
+    data_path: Path, glove_size: Literal[50, 100, 200, 300]
 ) -> ConceptVocab:
     # I don't like tqdm here, so redirect stderr to hide the porgress bar
     with redirect_stderr(open(os.devnull, "w")):
         logger.info("loading glove")
-        glove = GloVe(name="6B", dim=300, cache=data_path / "glove.6B")
+        glove = GloVe(name="6B", dim=glove_size, cache=data_path / "glove.6B")
     # Get grouped_attrs
     grouped_attrs: Dict[str, Vocab] = {}
     for key, tokens in json.load(open(data_path / "vgLists" / "attrMap.json")).items():

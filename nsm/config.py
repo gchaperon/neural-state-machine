@@ -1,3 +1,4 @@
+import argparse
 from pydantic import BaseModel
 from typing import Literal, Union
 from pathlib import Path
@@ -13,9 +14,26 @@ class Config(BaseModel):
     dropout: float
     glove_dim: Literal[50, 100, 200, 300]
     data_path: Path
+    subset_size: float
 
 
-def get_config(config_path: Union[str, Path]) -> Config:
-    with open(config_path) as f:
+def get_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--skip-train", dest="train", action="store_false")
+    parser.add_argument("--config-path", type=Path, default=Path("model_config.toml"))
+    for field in Config.__fields__.keys():
+        parser.add_argument(f"--{field}".replace("_", "-"))
+    args = parser.parse_args()
+    return args
+
+
+def get_config(args: argparse.Namespace) -> Config:
+    with open(args.config_path) as f:
         d = toml.loads(f.read())
-    return Config(**d)
+
+    return Config(
+        **{
+            **d,
+            **{k: v for k, v in vars(args).items() if v and k in Config.__fields__},
+        }
+    )
