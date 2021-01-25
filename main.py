@@ -1,3 +1,4 @@
+import datetime as dt
 from stanza.server import CoreNLPClient
 from operator import eq
 import random
@@ -45,17 +46,23 @@ logger.info(f"Config: {config}")
 glove = GloVe(dim=config.glove_dim)
 concept_vocab = get_concept_vocab(config.data_path, config.glove_dim)
 # DATASET
-gqa_train = GQASceneGraphsOnlyDataset(
+gqa_train, gqa_val = GQASceneGraphsOnlyDataset.splits(
     config.data_path / "GQA",
-    "train",
     glove,
     concept_vocab,
     config.data_path / "stanford-corenlp-4.2.0",
 )
+
 train_set = data.Subset(
     dataset=gqa_train,
     indices=random.sample(
         range(len(gqa_train)), k=int(config.subset_size * len(gqa_train))
+    ),
+)
+val_set = data.Subset(
+    dataset=gqa_val,
+    indices=random.sample(
+        range(len(gqa_val)), k=int(config.subset_size * len(gqa_train))
     ),
 )
 
@@ -63,6 +70,13 @@ train_loader = data.DataLoader(
     train_set,
     batch_size=config.batch_size,
     shuffle=True,
+    num_workers=min(6, len(os.sched_getaffinity(0))),
+    collate_fn=collate_nsmitems,
+)
+val_loader = data.DataLoader(
+    val_set,
+    batch_size=config.batch_size,
+    shuffle=False,
     num_workers=min(6, len(os.sched_getaffinity(0))),
     collate_fn=collate_nsmitems,
 )
@@ -87,26 +101,47 @@ optimizer = optim.Adam(model.parameters(), lr=config.learn_rate)
 
 checkpoints_path = config.data_path / "checkpoints"
 
+
+def eval_acc(model: nn.Module, loader: data.DataLoader) -> float:
+    previous_state = model.training
+    model.eval()
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for batch in tqdm(loader, desc="Evaluating"):
+            graph_batch, question_batch, targets = (e.to(device) for e in batch)
+            out = model(graph_batch, question_batch, concept_embeds, prop_embeds)
+            correct += (out.argmax(1) == targets).sum().item()
+            total += len(targets)
+    model.train(previous_state)
+    return correct / total
+
+
 if args.train:
-    tb_comment = "__".join(
-        f"{k}={v}" for k, v in vars(args).items() if v and k in config.__fields__
+    model.train()
+    tb_log_dir = "runs/" + "__".join(
+        [dt.date.today().isoformat()]
+        + [f"{k}={v}" for k, v in vars(args).items() if v and k in config.__fields__]
     )
-    tb_writer = tb.SummaryWriter(comment= tb_comment)
+    tb_writer = tb.SummaryWriter(tb_log_dir)
     for epoch in tqdm(range(config.epochs), desc="Epoch"):
         for global_step, batch in enumerate(
             tqdm(train_loader, desc="Batch"), start=epoch * len(train_loader)
         ):
             graph_batch, question_batch, targets = (e.to(device) for e in batch)
 
-            optimizer.zero_grad(set_to_none=True)
+            optimizer.zero_grad()
 
             out = model(graph_batch, question_batch, concept_embeds, prop_embeds)
             loss = criterion(out, targets)
             loss.backward()
             optimizer.step()
 
-            if global_step % 10 == 0:
+            if global_step % 20 == 0:
                 tb_writer.add_scalar("train_loss", loss.item(), global_step)
+
+        tb_writer.add_scalar("train_acc", eval_acc(model, train_loader), epoch)
+        tb_writer.add_scalar("val_acc", eval_acc(model, val_loader), epoch)
 
     model_path = (
         checkpoints_path / dt.datetime.now().isoformat(timespec="seconds") / "final.pt"
