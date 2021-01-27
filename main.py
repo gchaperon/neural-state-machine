@@ -1,4 +1,3 @@
-import datetime as dt
 from stanza.server import CoreNLPClient
 from operator import eq
 import random
@@ -33,12 +32,13 @@ import sys
 import os
 import logging
 import datetime as dt
+import time
 import argparse
 import pickle
 
 configure_logging()
-logger = logging.getLogger()
-
+logger = logging.getLogger(__name__)
+    
 args = get_args()
 config = get_config(args)
 logger.info(f"Config: {config}")
@@ -62,7 +62,7 @@ train_set = data.Subset(
 val_set = data.Subset(
     dataset=gqa_val,
     indices=random.sample(
-        range(len(gqa_val)), k=int(config.subset_size * len(gqa_train))
+        range(len(gqa_val)), k=int(config.subset_size * len(gqa_val))
     ),
 )
 
@@ -120,7 +120,7 @@ def eval_acc(model: nn.Module, loader: data.DataLoader) -> float:
 if args.train:
     model.train()
     tb_log_dir = "runs/" + "__".join(
-        [dt.date.today().isoformat()]
+        [dt.datetime.now().isoformat(timespec="seconds")]
         + [f"{k}={v}" for k, v in vars(args).items() if v and k in config.__fields__]
     )
     tb_writer = tb.SummaryWriter(tb_log_dir)
