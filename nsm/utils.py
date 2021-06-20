@@ -90,9 +90,9 @@ class Batch(NamedTuple):
         )
 
 
-# Graph, defined above. Tensor of dimension LxH, where L is the number of tokens
-# and H is the hidden size of the network (glove size). int corresponds to the index of
-# the answer token (coming from the vocab of the dataset)
+# Graph, defined above. Question tensor of dimension LxH, where L is the number of tokens
+# in the question and H is the hidden size of the network (glove size). int corresponds
+# to the index of the answer token (coming from the vocab of the dataset)
 NSMItem = Tuple[Graph, Tensor, int]
 # Batch, as defined above. PackedSequence is a nice way of managing variable-length
 # sequences and the last item (Tensor) is the batch of targets, should be a LongTensor

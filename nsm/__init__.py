@@ -12,7 +12,6 @@ from pydantic import ValidationError
 
 from nsm.utils import Config
 
-
 def parse_args(args: Optional[List[str]] = None) -> Config:
     parser = argparse.ArgumentParser("Train some models.")
     parser.add_argument("--data-dir", default="data", type=Path)

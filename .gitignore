@@ -17,3 +17,9 @@ htmlcov/
 
 # tensorboard runs
 runs/
+
+# tags file
+tags
+
+# pytorch-lightning logs
+lightning_logs

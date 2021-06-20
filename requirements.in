@@ -1,0 +1,9 @@
+torch
+pydantic
+torchtext
+ijson
+stanza
+h5py
+orjson
+pytorch-lightning==1.3.6
+networkx

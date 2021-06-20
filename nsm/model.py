@@ -1,5 +1,5 @@
-from typing import List, Optional, Tuple, Union, Callable
-
+from typing import List, Optional, Tuple, Union, Callable, Literal
+import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -92,6 +92,30 @@ class InstructionsModel(nn.Module):
         # Instructions
         instructions = F.softmax(tmp, dim=-1) @ tagged_unpacked
         return instructions, encoded
+
+
+class DummyInstructionsModel(nn.Module):
+    """
+    Instruction model that only unpacks the questions, and expects all questions to be the same length.
+    The encoded representation of a question is just a vector of zeros
+    """
+
+    def __init__(self, embedding_size: int, n_instructions: int):
+        super(DummyInstructionsModel, self).__init__()
+        self.embedding_size = embedding_size
+        self.n_instructions = n_instructions
+
+    def forward(self, vocab: Tensor, questions: PackedSequence):
+        instructions, lens_unpacked = pad_packed_sequence(questions, batch_first=True)
+        assert all(
+            l == lens_unpacked[0] for l in lens_unpacked
+        ), "all question lengths must be the same for DummyInstructionsModel"
+        batch_size, n_instructions, embedding_size = instructions.shape
+        # This check is not necessary for this dummy model
+        # assert self.n_instructions == n_instructions
+        return instructions, torch.zeros(
+            batch_size, embedding_size, device=vocab.device
+        )
 
 
 class NSMCell(nn.Module):
@@ -210,12 +234,18 @@ class AnswerClassifier(nn.Module):
             [nn.Linear(input_size, input_size), nn.Linear(input_size, output_size)]
         )
 
-    def forward(self, input: Tensor):
+    def forward(self, input: Tensor) -> Tensor:
         z = self.fc_layers[0](input)
         z = self.nonlinearity(z)
         z = self.dropout(z)
         z = self.fc_layers[1](z)
         return z
+
+
+_instruction_model_types = {
+    "normal": InstructionsModel,
+    "dummy": DummyInstructionsModel,
+}
 
 
 class NSM(nn.Module):
@@ -226,10 +256,12 @@ class NSM(nn.Module):
         computation_steps: int,
         output_size: int,
         dropout: float = 0.0,
+        instruction_model: Literal["normal", "dummy"] = "normal",
     ) -> None:
         super(NSM, self).__init__()
         self.dropout = nn.Dropout(dropout)
-        self.instructions_model = InstructionsModel(
+
+        self.instructions_model = _instruction_model_types[instruction_model](
             input_size, n_instructions=computation_steps + 1
         )
         self.nsm_cell = NSMCell(input_size, n_node_properties)
@@ -242,7 +274,7 @@ class NSM(nn.Module):
         concept_vocabulary: Tensor,
         # Last property embedding must be the relation
         property_embeddings: Tensor,
-    ) -> torch.Tensor:
+    ) -> Tensor:
         """
         Dimensions:
             graph_batch:
@@ -311,3 +343,39 @@ class NSM(nn.Module):
         )
         # B x 2H
         return self.classifier(torch.hstack((encoded_questions, aggregated)))
+
+
+class NSMLightningModule(pl.LightningModule):
+    def __init__(self, nsm: NSM, learn_rate: float = 1e-4) -> None:
+        super().__init__()
+        self.nsm = nsm
+        self.learn_rate = learn_rate
+
+    def forward(self, *args):
+        return self.nsm(*args)
+
+    def training_step(self, batch, batch_idx):
+        graphs, questions, concepts, properties, targets = batch
+        out = self(graphs, questions, concepts, properties)
+        loss = F.cross_entropy(out, targets)
+        running_acc = torch.sum(out.argmax(dim=1) == targets) / targets.size(0)
+        self.log("train_loss", loss)
+        self.log("running_train_acc", running_acc)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        graphs, questions, concepts, properties, targets = batch
+        out = self(graphs, questions, concepts, properties)
+        return out, targets
+
+    def validation_epoch_end(self, validation_step_outputs):
+        outs, targets = zip(*validation_step_outputs)
+        outs = torch.vstack(outs)
+        targets = torch.cat(targets)
+        loss = F.cross_entropy(outs, targets)
+        acc = torch.sum(outs.argmax(dim=1) == targets) / outs.size(0)
+        self.log("val_loss", loss)
+        self.log("val_acc", acc)
+
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters(), lr=self.learn_rate)
