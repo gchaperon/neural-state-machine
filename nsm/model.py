@@ -75,7 +75,7 @@ class InstructionsModel(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         # input should be a PackedSequence
         tagged = self.tagger(vocab, question_batch)
-        encoded = self.encoder(tagged)[1][0].squeeze()  # get last hidden
+        encoded = self.encoder(tagged)[1][0].squeeze(dim=0)  # get last hidden
         hidden = self.decoder(encoded)
         # Unpack sequences
         tagged_unpacked, lens_unpacked = pad_packed_sequence(tagged, batch_first=True)
@@ -346,9 +346,26 @@ class NSM(nn.Module):
 
 
 class NSMLightningModule(pl.LightningModule):
-    def __init__(self, nsm: NSM, learn_rate: float = 1e-4) -> None:
+    def __init__(
+        self,
+        input_size: int,
+        n_node_properties: int,
+        computation_steps: int,
+        output_size: int,
+        dropout: float = 0.0,
+        instruction_model: Literal["normal", "dummy"] = "normal",
+        learn_rate: float = 1e-4,
+    ) -> None:
         super().__init__()
-        self.nsm = nsm
+        self.save_hyperparameters()
+        self.nsm = NSM(
+            input_size,
+            n_node_properties,
+            computation_steps,
+            output_size,
+            dropout,
+            instruction_model,
+        )
         self.learn_rate = learn_rate
 
     def forward(self, *args):
