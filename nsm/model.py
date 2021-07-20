@@ -25,6 +25,9 @@ class Tagger(nn.Module):
         concept_based = similarity[:, -1:] * tokens + similarity[:, :-1] @ vocab
         return PackedSequence(concept_based, *rest)
 
+    def extra_repr(self):
+        return f"embedding_size={self.weight.shape[0]}"
+
 
 class InstructionDecoder(nn.Module):
     def __init__(
@@ -69,6 +72,8 @@ class InstructionsModel(nn.Module):
             hidden_size=embedding_size,
             n_instructions=n_instructions,
         )
+        # Use softmax as nn.Module to allow extracting attention weights
+        self.softmax = nn.Softmax(dim=-1)
 
     def forward(
         self, vocab: Tensor, question_batch: PackedSequence
@@ -90,7 +95,8 @@ class InstructionsModel(nn.Module):
             torch.cat([torch.arange(l, max_seq_len) for l in lens_unpacked]),
         ] = float("-inf")
         # Instructions
-        instructions = F.softmax(tmp, dim=-1) @ tagged_unpacked
+        # breakpoint()
+        instructions = self.softmax(tmp) @ tagged_unpacked
         return instructions, encoded
 
 
@@ -105,15 +111,16 @@ class DummyInstructionsModel(nn.Module):
         self.embedding_size = embedding_size
         self.n_instructions = n_instructions
 
-    def forward(self, vocab: Tensor, questions: PackedSequence):
+    def forward(self, vocab: Tensor, questions: PackedSequence, encoded: Tensor = None):
         instructions, lens_unpacked = pad_packed_sequence(questions, batch_first=True)
         assert all(
             l == lens_unpacked[0] for l in lens_unpacked
         ), "all question lengths must be the same for DummyInstructionsModel"
         batch_size, n_instructions, embedding_size = instructions.shape
+
         # This check is not necessary for this dummy model
         # assert self.n_instructions == n_instructions
-        return instructions, torch.zeros(
+        return instructions, encoded or torch.zeros(
             batch_size, embedding_size, device=vocab.device
         )
 
@@ -134,6 +141,10 @@ class NSMCell(nn.Module):
         self.weight_edge = nn.Parameter(torch.rand(input_size, input_size))
         self.weight_node_score = nn.Parameter(torch.rand(input_size))
         self.weight_relation_score = nn.Parameter(torch.rand(input_size))
+
+    def extra_repr(self):
+        n_node_properties, input_size, _ = self.weight_node_properties.size()
+        return f"{input_size=}, {n_node_properties=}"
 
     def forward(
         self,
@@ -393,6 +404,7 @@ class NSMLightningModule(pl.LightningModule):
         acc = torch.sum(outs.argmax(dim=1) == targets) / outs.size(0)
         self.log("val_loss", loss)
         self.log("val_acc", acc)
+        return outs, targets
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.learn_rate)

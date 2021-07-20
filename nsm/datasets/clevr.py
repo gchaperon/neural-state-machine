@@ -23,12 +23,28 @@ logger = logging.getLogger(__name__)
 # https://github.com/facebookresearch/clevr-dataset-gen
 # and using the info mentioned in this comment
 # https://github.com/facebookresearch/clevr-dataset-gen/issues/14#issuecomment-482896597
-THESE_TEMPLATES_SHOULD_BE_EASY_FOR_THE_NSM = [
-    *range(27, 31),
-    *range(74, 78),
-    *range(80, 84),
-    *range(86, 90),
-]
+# For reference, the loading order of templates in the question generation is the following
+#
+#    compare_integer.json
+#    comparison.json
+#    three_hop.json
+#    single_and.json
+#    same_relate.json
+#    single_or.json
+#    one_hop.json
+#    two_hop.json
+#    zero_hop.json
+#
+# Using this and the number of templates inside each file we can relate each
+# "question_family_index" to each template
+NHOPS_TO_CATS = {
+    3: range(27, 31),
+    1: range(74, 78),
+    2: range(80, 84),
+    0: range(86, 90),
+}
+
+ALL_EASY_CATS = [cat for range_ in NHOPS_TO_CATS.values() for cat in range_]
 
 
 class Vocab:
@@ -68,7 +84,7 @@ class Vocab:
             type_.lower()
             for type_, value in self.metadata["types"].items()
             if value is not None
-        ]
+        ][::-1]
         # send property "relation" to last
         return sorted(props, key=partial(eq, "relation"))
 
@@ -207,7 +223,6 @@ class ClevrNoImagesDataset(data.Dataset):
         def zip_path(self):
             return self.dataset_root / self.ZIP_NAME
 
-
         @property
         def metadata_path(self):
             return self.dataset_root / self.METADATA_NAME
@@ -256,6 +271,15 @@ class ClevrNoImagesDataset(data.Dataset):
             self.vocab.answers.index(question["answer"]),
         )
 
+    def get_raw(self, key: int):
+        question = self.questions[key]
+        scene = self.scenes[question["image_index"]]
+        return (
+            scene_to_graph(scene, self.vocab),
+            program_to_polish(question["program"]),
+            question["answer"],
+        )
+
     def __len__(self):
         return len(self.questions)
 
@@ -271,6 +295,7 @@ class ClevrNoImagesDataset(data.Dataset):
             with zipfile.ZipFile(paths.zip_path) as myzip:
                 myzip.extractall(path=paths.dataset_root)
             logger.info(f"Done!")
+
     @property
     def questions_path(self):
         return self.paths.dataset_root / self.paths.QUESTIONS_PATH_TEMPLATE.format(
@@ -284,31 +309,101 @@ class ClevrNoImagesDataset(data.Dataset):
         )
 
 
+class ClevrNoImagesWInstructionsDataset(ClevrNoImagesDataset):
+    """Change the way questions are embedded, generate instructions directly"""
+
+    def __init__(self, datadir, split, download=False, filter_fn=None):
+        # Ignore filter_fn argument to keep compat
+        # This only makes sense for "hop" questions, hence the filter_fn
+        super().__init__(datadir, split, download, filter_fn=is_gud_for_nsm)
+
+    def __getitem__(self, key):
+        graph, question, answer = self.get_raw(key)
+        return (
+            self.vocab.embed(graph),
+            self.instructions_from_question(question),
+            self.vocab.answers.index(answer),
+        )
+
+    def instructions_from_question(self, question):
+        # set number of instructions to 5, pad the shorter (5 is the max in the dataset)
+        # also pad first
+        n_ins = 5
+        vocab = self.vocab
+        instructions = []
+        group = []
+
+        for word in reversed(question):
+            if word in vocab.relations:
+                instructions.append(vocab.embed(group).sum(0))
+                group = [word]
+            elif word in vocab.attributes:
+                group.append(word)
+        if group:
+            instructions.append(vocab.embed(group).sum(0))
+        # last instruction, check which property is beeing queried
+        # "query_color" -> "color"
+        prop = question[0].split("_")[1]
+        instructions.append(vocab.property_embeddings[vocab.properties.index(prop)])
+        instructions = [
+            torch.zeros(vocab.embed_size) for _ in range(n_ins - len(instructions))
+        ] + instructions
+
+        return torch.stack(instructions)
+
+
 def is_gud_for_nsm(question):
-    return (
-        question["question_family_index"] in THESE_TEMPLATES_SHOULD_BE_EASY_FOR_THE_NSM
-    )
+    return question["question_family_index"] in ALL_EASY_CATS
 
 
 class ClevrNoImagesDataModule(pl.LightningDataModule):
-    def __init__(self, data_dir: tp.Union[str, Path], batch_size: int):
+    def __init__(
+        self,
+        data_dir: tp.Union[str, Path],
+        batch_size: int,
+        num_workers: int = 4,
+        w_instructions: bool = False,
+        nhops: tp.Optional[tp.List[int]] = None,
+    ):
         super().__init__()
         self.data_dir = data_dir
         self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.w_instructions = w_instructions
+        if w_instructions:
+            assert not nhops, "w_instructions is incompatible with nhops"
+        self.nhops = nhops or []
+        assert all(n in range(0, 4) for n in nhops), "nhops range is [0..3]"
 
     def prepare_data(self):
         ClevrNoImagesDataset.download(self.data_dir)
 
     def setup(self, stage: tp.Optional[str] = None):
-        self.clevr_train = ClevrNoImagesDataset(
-            self.data_dir, split="train", filter_fn=is_gud_for_nsm
+        dataset_cls = (
+            ClevrNoImagesWInstructionsDataset
+            if self.w_instructions
+            else ClevrNoImagesDataset
         )
-        self.clevr_val = ClevrNoImagesDataset(
-            self.data_dir, split="val", filter_fn=is_gud_for_nsm
+        filter_cats = (
+            [cat for nhops in self.nhops for cat in NHOPS_TO_CATS[nhops]]
+            if self.nhops
+            else ALL_EASY_CATS
         )
 
+        def filter_fn(question):
+            return question["question_family_index"] in filter_cats
+
+        if stage in ("fit", "validate", None):
+            self.clevr_val = dataset_cls(
+                self.data_dir, split="val", filter_fn=filter_fn
+            )
+        if stage in ("fit", None):
+            self.clevr_train = dataset_cls(
+                self.data_dir, split="train", filter_fn=filter_fn
+            )
+
     def _get_dataloader(self, split):
-        vocab = self.clevr_train.vocab
+        vocab = getattr(self, "clevr_train", self.clevr_val).vocab
 
         def collate(batch):
             graphs, questions, targets = collate_nsmitems(batch)
@@ -324,7 +419,7 @@ class ClevrNoImagesDataModule(pl.LightningDataModule):
             split,
             batch_size=self.batch_size,
             collate_fn=collate,
-            num_workers=os.cpu_count(),
+            num_workers=self.num_workers,
         )
 
     def train_dataloader(self):

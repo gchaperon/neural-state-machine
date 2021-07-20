@@ -12,20 +12,27 @@ import logging
 
 def main(args):
     pl.seed_everything(seed=123, workers=True)
-    datamodule = clevr.ClevrNoImagesDataModule("data", batch_size=32)
+    datamodule = clevr.ClevrNoImagesDataModule(
+        "data", batch_size=args.batch_size, w_instructions=False, nhops=args.nhops
+    )
 
     # most params obtained via inspection of dataset
     model = NSMLightningModule(
         input_size=45,
         n_node_properties=4,
-        computation_steps=8,
+        computation_steps=max(args.nhops) + 1,
+        # computation_steps=args.steps,
         output_size=28,
         learn_rate=0.001,
     )
+    metric_to_track = "train_loss"
     trainer = pl.Trainer(
         gpus=-1 if torch.cuda.is_available() else 0,
-        max_epochs=100,
-        callbacks=[pl.callbacks.early_stopping.EarlyStopping(monitor="val_loss")],
+        max_epochs=1000,
+        callbacks=[
+            pl.callbacks.EarlyStopping(monitor=metric_to_track, patience=10),
+            pl.callbacks.ModelCheckpoint(monitor=metric_to_track),
+        ],
     )
     trainer.fit(model, datamodule)
 
@@ -34,7 +41,15 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--q-len", type=int)
-    # parser.add_argument("--n-unique", type=int)
+    # parser.add_argument("--q-len", type=int)
+    # parser.add_argument("--steps", required=True, type=int)
+    parser.add_argument(
+        "--nhops",
+        type=int,
+        nargs="+",
+        default=[],
+        help="use questions in clevr thatrequire these number of hops only",
+    )
+    parser.add_argument("--batch-size", required=True, type=int)
     args = parser.parse_args()
     main(args)
