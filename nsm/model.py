@@ -173,6 +173,7 @@ class NSMCell(nn.Module):
         """
         # Compute node and edge score
         # N x H
+        # breakpoint()
         node_scores = self.nonlinearity(
             torch.sum(
                 # P x N x 1
@@ -306,6 +307,7 @@ class NSM(nn.Module):
             L*: Question length, variable, see PackedSequence docs for more info
             I: Computation steps
         """
+        # breakpoint()
         # B x (I + 1) x H,  B x H
         instructions, encoded_questions = self.instructions_model(
             concept_vocabulary, question_batch
