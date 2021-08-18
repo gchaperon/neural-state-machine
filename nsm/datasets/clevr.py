@@ -1,3 +1,4 @@
+import random
 import os
 import logging
 import torch
@@ -8,7 +9,7 @@ import typing as tp
 import zipfile
 import json
 from . import utils as data_utils
-from operator import itemgetter, eq
+from operator import itemgetter, eq, ne
 from functools import partial, singledispatchmethod, cached_property, lru_cache
 from nsm.utils import Graph, NSMItem, collate_nsmitems
 import collections.abc as abc
@@ -345,11 +346,150 @@ class ClevrNoImagesWInstructionsDataset(ClevrNoImagesDataset):
         # "query_color" -> "color"
         prop = question[0].split("_")[1]
         instructions.append(vocab.property_embeddings[vocab.properties.index(prop)])
+        # pad
         instructions = [
             torch.zeros(vocab.embed_size) for _ in range(n_ins - len(instructions))
         ] + instructions
 
         return torch.stack(instructions)
+
+    def random_adversarial(self, n_impostors=5):
+        """
+        The idea here is to create an impostor, repeat it N times, then create
+        a node for which some property wil actually be queried and change that 
+        specific property to a different one to all of the impostors. An adversarial
+        example should include at leat one relation, so a completely different node
+        must be created so that the NSM attends to that one, and the relate the target
+        node to this starting node using whatever relation
+        """
+
+        vocab = self.vocab
+
+        impostor = tuple(
+                random.choice(vocab.grouped_attributes[prop]) for prop in vocab.properties[:-1]
+        )
+        query_prop = random.choice(range(len(vocab.properties) - 1))
+        node = list(impostor)
+        node[query_prop] = random.choice(
+            [
+                attr
+                for attr in vocab.grouped_attributes[vocab.properties[query_prop]]
+                if attr != impostor[query_prop]
+            ]
+        )
+        node = tuple(node)
+        # this node should be completely different from impostor
+        start = tuple(
+            random.choice(
+                [
+                    attr
+                    for attr in vocab.grouped_attributes[vocab.properties[prop]]
+                    if attr != impostor[prop]
+                ]
+            )
+            for prop in range(len(vocab.properties) - 1)
+        )
+        rel = random.choice(vocab.grouped_attributes["relation"])
+        graph = Graph(
+            [node, start] + [impostor] * n_impostors,
+            edge_indices=[(1, 0)],
+            edge_attrs=[rel],
+        )
+
+        def flatten(tups):
+            return [el for tup in tups for el in tup]
+
+        # make question
+        question = [
+            f"query_{vocab.properties[query_prop]}",
+            "unique",
+            *flatten(
+                (f"filter_{vocab.properties[prop]}", node[prop])
+                for prop in [
+                    p for p in range(len(vocab.properties) - 1) if p != query_prop
+                ]
+            ),
+            "relate",
+            rel,
+            *flatten(
+                (f"filter_{vocab.properties[prop]}", start[prop])
+                for prop in range(len(vocab.properties) - 1)
+            ),
+            "scene",
+        ]
+        return graph, question, node[query_prop]
+
+    def old_random_adversarial(self, n_impostors=5):
+        vocab = self.vocab
+        # make random node, ignore the "relation" property
+        node = tuple(
+            random.choice(vocab.grouped_attributes[prop])
+            for prop in vocab.properties[:-1]
+        )
+        query_prop = random.choice(range(len(vocab.properties[:-1])))
+
+        # make a bunch of impostors that satisfy
+        # * for the queried prop they have all the same value, different to the value from "node"
+        # * among the other n-1 properties, each imposor should share n-2 properties with "node",
+        #   making "node" unique, but at the same time all the impostors are as close as possible
+        #   to "node".
+
+        impostors = []
+        # chose diferent target
+        fake_target = random.choice(
+            list(
+                filter(
+                    partial(ne, node[query_prop]),
+                    vocab.grouped_attributes[vocab.properties[query_prop]],
+                )
+            )
+        )
+        for _ in range(n_impostors):
+            impostor = list(node)
+            # set fake target
+            impostor[query_prop] = fake_target
+            # change any other property to a value different from "node"
+            other_prop = random.choice(
+                [i for i in range(len(vocab.properties[:-1])) if i != query_prop]
+            )
+            impostor[other_prop] = random.choice(
+                [
+                    attr
+                    for attr in vocab.grouped_attributes[vocab.properties[other_prop]]
+                    if attr != node[other_prop]
+                ]
+            )
+            impostors.append(tuple(impostor))
+
+        # make a question that selects "node" and queries for the property, kinda hardcoded
+        # since I know how the programs look like
+        question = [
+            f"query_{vocab.properties[query_prop]}",
+            "unique",
+            *[
+                s
+                for t in [
+                    (f"filter_{vocab.properties[i]}", node[i])
+                    for i in [
+                        prop
+                        for prop in range(len(vocab.properties) - 1)
+                        if prop != query_prop
+                    ]
+                ]
+                for s in t
+            ],
+            "scene",
+        ]
+        return (
+            # single edge so embedding doesn't break
+            Graph(
+                node_attrs=[node] + impostors,
+                edge_indices=[(0, 1)],
+                edge_attrs=["left"],
+            ),
+            question,
+            node[query_prop],
+        )
 
 
 def is_gud_for_nsm(question):
@@ -373,7 +513,7 @@ class ClevrNoImagesDataModule(pl.LightningDataModule):
         if w_instructions:
             assert not nhops, "w_instructions is incompatible with nhops"
         self.nhops = nhops or []
-        assert all(n in range(0, 4) for n in nhops), "nhops range is [0..3]"
+        assert all(n in range(0, 4) for n in self.nhops), "nhops range is [0..3]"
 
     def prepare_data(self):
         ClevrNoImagesDataset.download(self.data_dir)
