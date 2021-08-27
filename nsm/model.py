@@ -60,15 +60,17 @@ class InstructionDecoder(nn.Module):
 
 
 class InstructionsModel(nn.Module):
-    def __init__(self, embedding_size: int, n_instructions: int) -> None:
+    def __init__(
+        self, embedding_size: int, n_instructions: int, encoded_question_size: int
+    ) -> None:
         super(InstructionsModel, self).__init__()
 
         self.tagger = Tagger(embedding_size)
         self.encoder = nn.LSTM(
-            input_size=embedding_size, hidden_size=embedding_size, dropout=0.0
+            input_size=embedding_size, hidden_size=encoded_question_size, dropout=0.0
         )
         self.decoder = InstructionDecoder(
-            input_size=embedding_size,
+            input_size=encoded_question_size,
             hidden_size=embedding_size,
             n_instructions=n_instructions,
         )
@@ -84,6 +86,7 @@ class InstructionsModel(nn.Module):
         hidden = self.decoder(encoded)
         # Unpack sequences
         tagged_unpacked, lens_unpacked = pad_packed_sequence(tagged, batch_first=True)
+        """ All this was to mask attention from padding values, f that
         # Intermediate multiplication
         tmp = hidden @ tagged_unpacked.transpose(1, 2)
         # Mask values for softmax
@@ -97,6 +100,10 @@ class InstructionsModel(nn.Module):
         # Instructions
         # breakpoint()
         instructions = self.softmax(tmp) @ tagged_unpacked
+        """
+        instructions = (
+            self.softmax(hidden @ tagged_unpacked.transpose(1, 2)) @ tagged_unpacked
+        )
         return instructions, encoded
 
 
@@ -106,10 +113,13 @@ class DummyInstructionsModel(nn.Module):
     The encoded representation of a question is just a vector of zeros
     """
 
-    def __init__(self, embedding_size: int, n_instructions: int):
+    def __init__(
+        self, embedding_size: int, n_instructions: int, encoded_question_size: int
+    ):
         super(DummyInstructionsModel, self).__init__()
         self.embedding_size = embedding_size
         self.n_instructions = n_instructions
+        self.encoded_question_size = encoded_question_size
 
     def forward(self, vocab: Tensor, questions: PackedSequence, encoded: Tensor = None):
         instructions, lens_unpacked = pad_packed_sequence(questions, batch_first=True)
@@ -121,7 +131,14 @@ class DummyInstructionsModel(nn.Module):
         # This check is not necessary for this dummy model
         # assert self.n_instructions == n_instructions
         return instructions, encoded or torch.zeros(
-            batch_size, embedding_size, device=vocab.device
+            batch_size, self.encoded_question_size, device=vocab.device
+        )
+
+    def extra_repr(self):
+        return (
+            f"embedding_size={self.embedding_size}, "
+            f"n_instructions={self.n_instructions}, "
+            f"encoded_question_size={self.encoded_question_size}"
         )
 
 
@@ -267,17 +284,23 @@ class NSM(nn.Module):
         n_node_properties: int,
         computation_steps: int,
         output_size: int,
+        encoded_question_size: Optional[int] = None,
         dropout: float = 0.0,
         instruction_model: Literal["normal", "dummy"] = "normal",
     ) -> None:
         super(NSM, self).__init__()
-        self.dropout = nn.Dropout(dropout)
+        encoded_question_size = encoded_question_size or input_size
 
+        self.dropout = nn.Dropout(dropout)
         self.instructions_model = _instruction_model_types[instruction_model](
-            input_size, n_instructions=computation_steps + 1
+            input_size,
+            n_instructions=computation_steps + 1,
+            encoded_question_size=encoded_question_size,
         )
         self.nsm_cell = NSMCell(input_size, n_node_properties)
-        self.classifier = AnswerClassifier(2 * input_size, output_size, dropout=dropout)
+        self.classifier = AnswerClassifier(
+            input_size + encoded_question_size, output_size, dropout=dropout
+        )
 
     def forward(
         self,
@@ -365,6 +388,7 @@ class NSMLightningModule(pl.LightningModule):
         n_node_properties: int,
         computation_steps: int,
         output_size: int,
+        encoded_question_size: Optional[int]= None,
         dropout: float = 0.0,
         instruction_model: Literal["normal", "dummy"] = "normal",
         learn_rate: float = 1e-4,
@@ -376,6 +400,7 @@ class NSMLightningModule(pl.LightningModule):
             n_node_properties,
             computation_steps,
             output_size,
+            encoded_question_size,
             dropout,
             instruction_model,
         )

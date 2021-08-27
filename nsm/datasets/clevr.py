@@ -249,7 +249,7 @@ class ClevrNoImagesDataset(data.Dataset):
             self.download(datadir)
 
         logger.info(f"Loading {self.questions_path}")
-        # if no filter function, filter empty dicst
+        # if no filter function, filter empty dicts
         filter_fn = filter_fn or bool
         with open(self.questions_path) as questions_file:
             self.questions = sorted(
@@ -263,7 +263,7 @@ class ClevrNoImagesDataset(data.Dataset):
                 for scene in json.load(scenes_file)["scenes"]
             }
 
-    def __getitem__(self, key: int) -> NSMItem:
+    def __getitem__(self, key: int):
         question = self.questions[key]
         scene = self.scenes[question["image_index"]]
         return (
@@ -356,8 +356,8 @@ class ClevrNoImagesWInstructionsDataset(ClevrNoImagesDataset):
     def random_adversarial(self, n_impostors=5):
         """
         The idea here is to create an impostor, repeat it N times, then create
-        a node for which some property wil actually be queried and change that 
-        specific property to a different one to all of the impostors. An adversarial
+        a node for which some property will actually be queried and change that 
+        specific property to a different value compared to all of the impostors. An adversarial
         example should include at leat one relation, so a completely different node
         must be created so that the NSM attends to that one, and the relate the target
         node to this starting node using whatever relation
