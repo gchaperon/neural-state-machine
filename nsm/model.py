@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple, Union, Callable, Literal
+from typing import List, Optional, Tuple, Union, Callable, Literal, Any
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
@@ -50,7 +50,9 @@ class InstructionDecoder(nn.Module):
             I: Number of instructions
         """
         # Explicit better than implicit, amarite (?)
-        hx: torch.Tensor = torch.zeros_like(input)
+        hx: torch.Tensor = torch.zeros(
+            input.size(0), self.rnn_cell.hidden_size, device=input.device
+        )
         # [B x H, ...]
         hiddens: List[Tensor] = []
         for _ in range(self.n_instructions):
@@ -76,6 +78,10 @@ class InstructionsModel(nn.Module):
         )
         # Use softmax as nn.Module to allow extracting attention weights
         self.softmax = nn.Softmax(dim=-1)
+
+    @property
+    def encoded_question_size(self):
+        return self.encoder.hidden_size
 
     def forward(
         self, vocab: Tensor, question_batch: PackedSequence
@@ -129,7 +135,7 @@ class DummyInstructionsModel(nn.Module):
         batch_size, n_instructions, embedding_size = instructions.shape
 
         # This check is not necessary for this dummy model
-        # assert self.n_instructions == n_instructions
+        assert self.n_instructions == n_instructions
         return instructions, encoded or torch.zeros(
             batch_size, self.encoded_question_size, device=vocab.device
         )
@@ -271,36 +277,25 @@ class AnswerClassifier(nn.Module):
         return z
 
 
-_instruction_model_types = {
-    "normal": InstructionsModel,
-    "dummy": DummyInstructionsModel,
-}
-
-
 class NSM(nn.Module):
     def __init__(
         self,
         input_size: int,
         n_node_properties: int,
-        computation_steps: int,
         output_size: int,
-        encoded_question_size: Optional[int] = None,
+        instruction_model: Any,
         dropout: float = 0.0,
-        instruction_model: Literal["normal", "dummy"] = "normal",
     ) -> None:
         super(NSM, self).__init__()
-        encoded_question_size = encoded_question_size or input_size
 
-        self.dropout = nn.Dropout(dropout)
-        self.instructions_model = _instruction_model_types[instruction_model](
-            input_size,
-            n_instructions=computation_steps + 1,
-            encoded_question_size=encoded_question_size,
-        )
+        self.instructions_model = instruction_model
         self.nsm_cell = NSMCell(input_size, n_node_properties)
         self.classifier = AnswerClassifier(
-            input_size + encoded_question_size, output_size, dropout=dropout
+            input_size + instruction_model.encoded_question_size,
+            output_size,
+            dropout=dropout,
         )
+        self.dropout = nn.Dropout(dropout)
 
     def forward(
         self,
@@ -381,28 +376,34 @@ class NSM(nn.Module):
         return self.classifier(torch.hstack((encoded_questions, aggregated)))
 
 
+_instruction_model_types = {
+    "normal": InstructionsModel,
+    "dummy": DummyInstructionsModel,
+}
+
+
 class NSMLightningModule(pl.LightningModule):
     def __init__(
         self,
         input_size: int,
         n_node_properties: int,
-        computation_steps: int,
         output_size: int,
-        encoded_question_size: Optional[int]= None,
+        instruction_model_name: Literal["normal", "dummy"],
+        instruction_model_kwargs: dict,
         dropout: float = 0.0,
-        instruction_model: Literal["normal", "dummy"] = "normal",
         learn_rate: float = 1e-4,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
+        instruction_model = _instruction_model_types[instruction_model_name](
+            **instruction_model_kwargs
+        )
         self.nsm = NSM(
-            input_size,
-            n_node_properties,
-            computation_steps,
-            output_size,
-            encoded_question_size,
-            dropout,
-            instruction_model,
+            input_size=input_size,
+            n_node_properties=n_node_properties,
+            output_size=output_size,
+            instruction_model=instruction_model,
+            dropout=dropout,
         )
         self.learn_rate = learn_rate
 
