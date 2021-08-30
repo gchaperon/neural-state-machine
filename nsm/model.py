@@ -113,6 +113,78 @@ class InstructionsModel(nn.Module):
         return instructions, encoded
 
 
+class FFEncoderFFDecoderInstructionsModel(nn.Module):
+    def __init__(
+        self,
+        embedding_size: int,
+        n_instructions: int,
+        encoded_question_size: int,
+    ):
+        super().__init__()
+        # hardcode max seq len value, all questions in (my version of) clevr are
+        # 41 tokens at most
+        self.max_seq_len = 50
+        self.encoded_question_size = encoded_question_size
+        self.encoder = nn.Sequential(
+            nn.Flatten(start_dim=1, end_dim=2),
+            nn.Linear(
+                self.max_seq_len * embedding_size, self.max_seq_len * embedding_size
+            ),
+            nn.ReLU(),
+            nn.Linear(self.max_seq_len * embedding_size, encoded_question_size),
+            nn.ReLU(),
+        )
+
+        self.decoder = nn.Sequential(
+            nn.Linear(encoded_question_size, encoded_question_size),
+            nn.ReLU(),
+            nn.Linear(encoded_question_size, n_instructions * embedding_size),
+            nn.Unflatten(dim=1, unflattened_size=(n_instructions, embedding_size)),
+        )
+
+    def forward(
+        self, vocab: Tensor, question_batch: PackedSequence
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        padded, _ = pad_packed_sequence(
+            question_batch, batch_first=True, total_length=self.max_seq_len
+        )
+        encoded = self.encoder(padded)
+        instructions = self.decoder(encoded)
+        return instructions, encoded
+
+
+class PleaseOverfitInstructionsModel(nn.Module):
+    def __init__(
+        self, embedding_size: int, n_instructions: int, encoded_question_size: int
+    ):
+        super().__init__()
+        self.max_len = 50
+        self.encoded_question_size = encoded_question_size
+        self.model = nn.Sequential(
+            nn.Flatten(start_dim=1, end_dim=2),
+            nn.Linear(self.max_len * embedding_size, self.max_len * embedding_size),
+            nn.ReLU(),
+            nn.Linear(self.max_len * embedding_size, self.max_len * embedding_size),
+            nn.ReLU(),
+            nn.Linear(self.max_len * embedding_size, n_instructions * embedding_size),
+            nn.Unflatten(dim=1, unflattened_size=(n_instructions, embedding_size)),
+        )
+
+    def forward(self, vocab, question_batch):
+        padded, _ = pad_packed_sequence(
+            question_batch, batch_first=True, total_length=self.max_len
+        )
+        instructions = self.model(padded)
+        return (
+            instructions,
+            torch.zeros(
+                instructions.shape[0],
+                self.encoded_question_size,
+                device=instructions.device,
+            ),
+        )
+
+
 class DummyInstructionsModel(nn.Module):
     """
     Instruction model that only unpacks the questions, and expects all questions to be the same length.
@@ -376,9 +448,11 @@ class NSM(nn.Module):
         return self.classifier(torch.hstack((encoded_questions, aggregated)))
 
 
-_instruction_model_types = {
+instruction_model_types = {
     "normal": InstructionsModel,
     "dummy": DummyInstructionsModel,
+    "ff_encoder_decoder": FFEncoderFFDecoderInstructionsModel,
+    "desperation": PleaseOverfitInstructionsModel,
 }
 
 
@@ -388,14 +462,16 @@ class NSMLightningModule(pl.LightningModule):
         input_size: int,
         n_node_properties: int,
         output_size: int,
-        instruction_model_name: Literal["normal", "dummy"],
+        instruction_model_name: Literal[
+            "normal", "dummy", "ff_encode_decoder", "desperation"
+        ],
         instruction_model_kwargs: dict,
         dropout: float = 0.0,
         learn_rate: float = 1e-4,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
-        instruction_model = _instruction_model_types[instruction_model_name](
+        instruction_model = instruction_model_types[instruction_model_name](
             **instruction_model_kwargs
         )
         self.nsm = NSM(

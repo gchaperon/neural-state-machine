@@ -1,4 +1,4 @@
-from nsm.model import NSM, NSMLightningModule
+from nsm.model import NSM, NSMLightningModule, instruction_model_types
 import nsm.datasets.synthetic as syn
 import nsm.datasets.clevr as clevr
 import pytorch_lightning as pl
@@ -22,12 +22,12 @@ def main(args):
         n_node_properties=4,
         # computation_steps=args.steps,
         output_size=28,
-        instruction_model_name="normal",
+        instruction_model_name=args.instruction_model_name,
         instruction_model_kwargs={
             "embedding_size": 45,
             "n_instructions": max(args.nhops) + 2,
             "encoded_question_size": args.encoded_question_size,
-        }, 
+        },
         learn_rate=args.learn_rate,
     )
     metric_to_track = "train_loss"
@@ -58,6 +58,11 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", required=True, type=int)
     parser.add_argument("--learn-rate", required=True, type=float)
     parser.add_argument("--encoded-question-size", required=True, type=int)
+    parser.add_argument(
+        "--instruction-model-name",
+        required=True,
+        choices=list(instruction_model_types.keys()),
+    )
 
     args = parser.parse_args()
     main(args)
