@@ -278,7 +278,7 @@ def run(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", default=123, type=int)
-    parser.add_argument("--path", dest="checkpoint_path")
+    parser.add_argument("--path", dest="checkpoint_path", required=True)
     args = parser.parse_args()
 
     run(args)

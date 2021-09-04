@@ -1,4 +1,4 @@
-from nsm.model import NSM, NSMLightningModule
+from nsm.model import NSM, NSMLightningModule, instruction_model_types
 import nsm.datasets.synthetic as syn
 import nsm.datasets.clevr as clevr
 import pytorch_lightning as pl
@@ -20,17 +20,22 @@ def main(args):
     model = NSMLightningModule(
         input_size=45,
         n_node_properties=4,
-        computation_steps=max(args.nhops) + 1,
         # computation_steps=args.steps,
         output_size=28,
-        learn_rate=0.001,
+        instruction_model_name=args.instruction_model_name,
+        instruction_model_kwargs={
+            "embedding_size": 45,
+            "n_instructions": max(args.nhops) + 2,
+            "encoded_question_size": args.encoded_question_size,
+        },
+        learn_rate=args.learn_rate,
     )
     metric_to_track = "train_loss"
     trainer = pl.Trainer(
         gpus=-1 if torch.cuda.is_available() else 0,
         max_epochs=1000,
         callbacks=[
-            pl.callbacks.EarlyStopping(monitor=metric_to_track, patience=10),
+            pl.callbacks.EarlyStopping(monitor=metric_to_track, patience=100),
             pl.callbacks.ModelCheckpoint(monitor=metric_to_track),
         ],
     )
@@ -48,8 +53,16 @@ if __name__ == "__main__":
         type=int,
         nargs="+",
         default=[],
-        help="use questions in clevr thatrequire these number of hops only",
+        help="use questions in clevr that require these number of hops only",
     )
     parser.add_argument("--batch-size", required=True, type=int)
+    parser.add_argument("--learn-rate", required=True, type=float)
+    parser.add_argument("--encoded-question-size", required=True, type=int)
+    parser.add_argument(
+        "--instruction-model-name",
+        required=True,
+        choices=list(instruction_model_types.keys()),
+    )
+
     args = parser.parse_args()
     main(args)

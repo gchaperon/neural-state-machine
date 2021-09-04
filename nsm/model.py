@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple, Union, Callable, Literal
+from typing import List, Optional, Tuple, Union, Callable, Literal, Any
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
@@ -50,7 +50,9 @@ class InstructionDecoder(nn.Module):
             I: Number of instructions
         """
         # Explicit better than implicit, amarite (?)
-        hx: torch.Tensor = torch.zeros_like(input)
+        hx: torch.Tensor = torch.zeros(
+            input.size(0), self.rnn_cell.hidden_size, device=input.device
+        )
         # [B x H, ...]
         hiddens: List[Tensor] = []
         for _ in range(self.n_instructions):
@@ -60,20 +62,26 @@ class InstructionDecoder(nn.Module):
 
 
 class InstructionsModel(nn.Module):
-    def __init__(self, embedding_size: int, n_instructions: int) -> None:
+    def __init__(
+        self, embedding_size: int, n_instructions: int, encoded_question_size: int
+    ) -> None:
         super(InstructionsModel, self).__init__()
 
         self.tagger = Tagger(embedding_size)
         self.encoder = nn.LSTM(
-            input_size=embedding_size, hidden_size=embedding_size, dropout=0.0
+            input_size=embedding_size, hidden_size=encoded_question_size, dropout=0.0
         )
         self.decoder = InstructionDecoder(
-            input_size=embedding_size,
+            input_size=encoded_question_size,
             hidden_size=embedding_size,
             n_instructions=n_instructions,
         )
         # Use softmax as nn.Module to allow extracting attention weights
         self.softmax = nn.Softmax(dim=-1)
+
+    @property
+    def encoded_question_size(self):
+        return self.encoder.hidden_size
 
     def forward(
         self, vocab: Tensor, question_batch: PackedSequence
@@ -84,6 +92,7 @@ class InstructionsModel(nn.Module):
         hidden = self.decoder(encoded)
         # Unpack sequences
         tagged_unpacked, lens_unpacked = pad_packed_sequence(tagged, batch_first=True)
+        """ All this was to mask attention from padding values, f that
         # Intermediate multiplication
         tmp = hidden @ tagged_unpacked.transpose(1, 2)
         # Mask values for softmax
@@ -97,7 +106,83 @@ class InstructionsModel(nn.Module):
         # Instructions
         # breakpoint()
         instructions = self.softmax(tmp) @ tagged_unpacked
+        """
+        instructions = (
+            self.softmax(hidden @ tagged_unpacked.transpose(1, 2)) @ tagged_unpacked
+        )
         return instructions, encoded
+
+
+class FFEncoderFFDecoderInstructionsModel(nn.Module):
+    def __init__(
+        self,
+        embedding_size: int,
+        n_instructions: int,
+        encoded_question_size: int,
+    ):
+        super().__init__()
+        # hardcode max seq len value, all questions in (my version of) clevr are
+        # 41 tokens at most
+        self.max_seq_len = 50
+        self.encoded_question_size = encoded_question_size
+        self.encoder = nn.Sequential(
+            nn.Flatten(start_dim=1, end_dim=2),
+            nn.Linear(
+                self.max_seq_len * embedding_size, self.max_seq_len * embedding_size
+            ),
+            nn.ReLU(),
+            nn.Linear(self.max_seq_len * embedding_size, encoded_question_size),
+            nn.ReLU(),
+        )
+
+        self.decoder = nn.Sequential(
+            nn.Linear(encoded_question_size, encoded_question_size),
+            nn.ReLU(),
+            nn.Linear(encoded_question_size, n_instructions * embedding_size),
+            nn.Unflatten(dim=1, unflattened_size=(n_instructions, embedding_size)),
+        )
+
+    def forward(
+        self, vocab: Tensor, question_batch: PackedSequence
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        padded, _ = pad_packed_sequence(
+            question_batch, batch_first=True, total_length=self.max_seq_len
+        )
+        encoded = self.encoder(padded)
+        instructions = self.decoder(encoded)
+        return instructions, encoded
+
+
+class PleaseOverfitInstructionsModel(nn.Module):
+    def __init__(
+        self, embedding_size: int, n_instructions: int, encoded_question_size: int
+    ):
+        super().__init__()
+        self.max_len = 50
+        self.encoded_question_size = encoded_question_size
+        self.model = nn.Sequential(
+            nn.Flatten(start_dim=1, end_dim=2),
+            nn.Linear(self.max_len * embedding_size, self.max_len * embedding_size),
+            nn.ReLU(),
+            nn.Linear(self.max_len * embedding_size, self.max_len * embedding_size),
+            nn.ReLU(),
+            nn.Linear(self.max_len * embedding_size, n_instructions * embedding_size),
+            nn.Unflatten(dim=1, unflattened_size=(n_instructions, embedding_size)),
+        )
+
+    def forward(self, vocab, question_batch):
+        padded, _ = pad_packed_sequence(
+            question_batch, batch_first=True, total_length=self.max_len
+        )
+        instructions = self.model(padded)
+        return (
+            instructions,
+            torch.zeros(
+                instructions.shape[0],
+                self.encoded_question_size,
+                device=instructions.device,
+            ),
+        )
 
 
 class DummyInstructionsModel(nn.Module):
@@ -106,10 +191,13 @@ class DummyInstructionsModel(nn.Module):
     The encoded representation of a question is just a vector of zeros
     """
 
-    def __init__(self, embedding_size: int, n_instructions: int):
+    def __init__(
+        self, embedding_size: int, n_instructions: int, encoded_question_size: int
+    ):
         super(DummyInstructionsModel, self).__init__()
         self.embedding_size = embedding_size
         self.n_instructions = n_instructions
+        self.encoded_question_size = encoded_question_size
 
     def forward(self, vocab: Tensor, questions: PackedSequence, encoded: Tensor = None):
         instructions, lens_unpacked = pad_packed_sequence(questions, batch_first=True)
@@ -119,9 +207,16 @@ class DummyInstructionsModel(nn.Module):
         batch_size, n_instructions, embedding_size = instructions.shape
 
         # This check is not necessary for this dummy model
-        # assert self.n_instructions == n_instructions
+        assert self.n_instructions == n_instructions
         return instructions, encoded or torch.zeros(
-            batch_size, embedding_size, device=vocab.device
+            batch_size, self.encoded_question_size, device=vocab.device
+        )
+
+    def extra_repr(self):
+        return (
+            f"embedding_size={self.embedding_size}, "
+            f"n_instructions={self.n_instructions}, "
+            f"encoded_question_size={self.encoded_question_size}"
         )
 
 
@@ -254,30 +349,25 @@ class AnswerClassifier(nn.Module):
         return z
 
 
-_instruction_model_types = {
-    "normal": InstructionsModel,
-    "dummy": DummyInstructionsModel,
-}
-
-
 class NSM(nn.Module):
     def __init__(
         self,
         input_size: int,
         n_node_properties: int,
-        computation_steps: int,
         output_size: int,
+        instruction_model: Any,
         dropout: float = 0.0,
-        instruction_model: Literal["normal", "dummy"] = "normal",
     ) -> None:
         super(NSM, self).__init__()
-        self.dropout = nn.Dropout(dropout)
 
-        self.instructions_model = _instruction_model_types[instruction_model](
-            input_size, n_instructions=computation_steps + 1
-        )
+        self.instructions_model = instruction_model
         self.nsm_cell = NSMCell(input_size, n_node_properties)
-        self.classifier = AnswerClassifier(2 * input_size, output_size, dropout=dropout)
+        self.classifier = AnswerClassifier(
+            input_size + instruction_model.encoded_question_size,
+            output_size,
+            dropout=dropout,
+        )
+        self.dropout = nn.Dropout(dropout)
 
     def forward(
         self,
@@ -358,26 +448,38 @@ class NSM(nn.Module):
         return self.classifier(torch.hstack((encoded_questions, aggregated)))
 
 
+instruction_model_types = {
+    "normal": InstructionsModel,
+    "dummy": DummyInstructionsModel,
+    "ff_encoder_decoder": FFEncoderFFDecoderInstructionsModel,
+    "desperation": PleaseOverfitInstructionsModel,
+}
+
+
 class NSMLightningModule(pl.LightningModule):
     def __init__(
         self,
         input_size: int,
         n_node_properties: int,
-        computation_steps: int,
         output_size: int,
+        instruction_model_name: Literal[
+            "normal", "dummy", "ff_encode_decoder", "desperation"
+        ],
+        instruction_model_kwargs: dict,
         dropout: float = 0.0,
-        instruction_model: Literal["normal", "dummy"] = "normal",
         learn_rate: float = 1e-4,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
+        instruction_model = instruction_model_types[instruction_model_name](
+            **instruction_model_kwargs
+        )
         self.nsm = NSM(
-            input_size,
-            n_node_properties,
-            computation_steps,
-            output_size,
-            dropout,
-            instruction_model,
+            input_size=input_size,
+            n_node_properties=n_node_properties,
+            output_size=output_size,
+            instruction_model=instruction_model,
+            dropout=dropout,
         )
         self.learn_rate = learn_rate
 
