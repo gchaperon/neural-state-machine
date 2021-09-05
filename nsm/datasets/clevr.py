@@ -314,9 +314,11 @@ class ClevrNoImagesWInstructionsDataset(ClevrNoImagesDataset):
     """Change the way questions are embedded, generate instructions directly"""
 
     def __init__(self, datadir, split, download=False, filter_fn=None):
-        # Ignore filter_fn argument to keep compat
-        # This only makes sense for "hop" questions, hence the filter_fn
-        super().__init__(datadir, split, download, filter_fn=is_gud_for_nsm)
+        super().__init__(datadir, split, download, filter_fn=filter_fn)
+        # Allow filter_fn but check that all example belong to "hop" type questions
+        assert all(
+            q["question_family_index"] in ALL_EASY_CATS for q in self.questions
+        ), "shit dawg, u messed up"
 
     def __getitem__(self, key):
         graph, question, answer = self.get_raw(key)
@@ -329,7 +331,7 @@ class ClevrNoImagesWInstructionsDataset(ClevrNoImagesDataset):
     def instructions_from_question(self, question):
         # set number of instructions to 5, pad the shorter (5 is the max in the dataset)
         # also pad first
-        n_ins = 5
+        n_ins = 2
         vocab = self.vocab
         instructions = []
         group = []
@@ -356,7 +358,7 @@ class ClevrNoImagesWInstructionsDataset(ClevrNoImagesDataset):
     def random_adversarial(self, n_impostors=5):
         """
         The idea here is to create an impostor, repeat it N times, then create
-        a node for which some property will actually be queried and change that 
+        a node for which some property will actually be queried and change that
         specific property to a different value compared to all of the impostors. An adversarial
         example should include at leat one relation, so a completely different node
         must be created so that the NSM attends to that one, and the relate the target
@@ -366,7 +368,8 @@ class ClevrNoImagesWInstructionsDataset(ClevrNoImagesDataset):
         vocab = self.vocab
 
         impostor = tuple(
-                random.choice(vocab.grouped_attributes[prop]) for prop in vocab.properties[:-1]
+            random.choice(vocab.grouped_attributes[prop])
+            for prop in vocab.properties[:-1]
         )
         query_prop = random.choice(range(len(vocab.properties) - 1))
         node = list(impostor)
@@ -510,8 +513,6 @@ class ClevrNoImagesDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.w_instructions = w_instructions
-        if w_instructions:
-            assert not nhops, "w_instructions is incompatible with nhops"
         self.nhops = nhops or []
         assert all(n in range(0, 4) for n in self.nhops), "nhops range is [0..3]"
 
