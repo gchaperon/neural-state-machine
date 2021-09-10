@@ -10,8 +10,14 @@ import zipfile
 import json
 from . import utils as data_utils
 from operator import itemgetter, eq, ne
-from functools import partial, singledispatchmethod, cached_property, lru_cache
-from nsm.utils import Graph, NSMItem, collate_nsmitems
+from functools import (
+    partial,
+    partialmethod,
+    singledispatchmethod,
+    cached_property,
+    lru_cache,
+)
+from nsm.utils import Graph, NSMItem, collate_nsmitems, collate_graphs
 import collections.abc as abc
 
 
@@ -310,28 +316,33 @@ class ClevrNoImagesDataset(data.Dataset):
         )
 
 
-class ClevrNoImagesWInstructionsDataset(ClevrNoImagesDataset):
+class ClevrWInstructions(ClevrNoImagesDataset):
     """Change the way questions are embedded, generate instructions directly"""
 
-    def __init__(self, datadir, split, download=False, filter_fn=None):
+    def __init__(
+        self, datadir, split, download=False, nhops: tp.Optional[tp.List[int]] = None
+    ):
+        self.nhops = nhops or list(NHOPS_TO_CATS.keys())
+        cats = [cat for hop in self.nhops for cat in NHOPS_TO_CATS[hop]]
+
+        def filter_fn(question):
+            return question["question_family_index"] in cats
+
         super().__init__(datadir, split, download, filter_fn=filter_fn)
-        # Allow filter_fn but check that all example belong to "hop" type questions
-        assert all(
-            q["question_family_index"] in ALL_EASY_CATS for q in self.questions
-        ), "shit dawg, u messed up"
 
     def __getitem__(self, key):
         graph, question, answer = self.get_raw(key)
         return (
             self.vocab.embed(graph),
-            self.instructions_from_question(question),
+            self.vocab.embed(question),
             self.vocab.answers.index(answer),
+            self.instructions_from_question(question),
         )
 
     def instructions_from_question(self, question):
-        # set number of instructions to 5, pad the shorter (5 is the max in the dataset)
-        # also pad first
-        n_ins = 2
+        # + 2 because of first instruction to focus on initial node and last instruction
+        # to query for a prop
+        n_ins = max(self.nhops) + 2
         vocab = self.vocab
         instructions = []
         group = []
@@ -497,6 +508,51 @@ class ClevrNoImagesWInstructionsDataset(ClevrNoImagesDataset):
 
 def is_gud_for_nsm(question):
     return question["question_family_index"] in ALL_EASY_CATS
+
+
+class ClevrWInstructionsDataModule(pl.LightningDataModule):
+    def __init__(self, datadir, batch_size, nhops=None):
+        super().__init__()
+        self.datadir = datadir
+        self.batch_size = batch_size
+        self.nhops = nhops
+
+    def prepare_data(self):
+        ClevrWInstructions.download(self.datadir)
+
+    def setup(self, stage):
+        if stage in ("fit", "validate", None):
+            self.clevr_val = ClevrWInstructions(
+                self.datadir, split="val", nhops=self.nhops
+            )
+        if stage in ("fit", None):
+            self.clevr_train = ClevrWInstruction(
+                self.datadir, split="train", nhops=self.nhops
+            )
+
+    def _get_dataloader(self, split: tp.Literal["train", "val"]):
+        dataset = getattr(self, f"clevr_{split}")
+        vocab = dataset.vocab
+
+        def collate_fn(batch):
+            graphs, questions, targets, instructionss = zip(*batch)
+            return (
+                collate_graphs(graphs),
+                torch.nn.utils.rnn.pack_sequence(questions, enforce_sorted=False),
+                torch.tensor(targets),
+                torch.stack(instructionss),
+            )
+
+        return data.DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=split == "train",
+            collate_fn=collate_fn,
+            num_workers=os.cpu_count(),
+        )
+
+    train_dataloader = partialmethod(_get_dataloader, "train")
+    val_dataloader = partialmethod(_get_dataloader, "val")
 
 
 class ClevrNoImagesDataModule(pl.LightningDataModule):
