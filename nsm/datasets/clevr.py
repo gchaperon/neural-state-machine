@@ -2,6 +2,7 @@ import random
 import os
 import logging
 import torch
+import torch.nn.functional as F
 import torch.utils.data as data
 import pytorch_lightning as pl
 from pathlib import Path
@@ -357,8 +358,12 @@ class ClevrWInstructions(ClevrNoImagesDataset):
             instructions.append(vocab.embed(group).sum(0))
         # last instruction, check which property is beeing queried
         # "query_color" -> "color"
+        # normalize to keep l2 loss reasonable when using generated instructions
+        # as supervision
         prop = question[0].split("_")[1]
-        instructions.append(vocab.property_embeddings[vocab.properties.index(prop)])
+        instructions.append(
+            F.normalize(vocab.property_embeddings[vocab.properties.index(prop)], dim=0)
+        )
         # pad
         instructions = [
             torch.zeros(vocab.embed_size) for _ in range(n_ins - len(instructions))
@@ -526,7 +531,7 @@ class ClevrWInstructionsDataModule(pl.LightningDataModule):
                 self.datadir, split="val", nhops=self.nhops
             )
         if stage in ("fit", None):
-            self.clevr_train = ClevrWInstruction(
+            self.clevr_train = ClevrWInstructions(
                 self.datadir, split="train", nhops=self.nhops
             )
 
@@ -539,6 +544,8 @@ class ClevrWInstructionsDataModule(pl.LightningDataModule):
             return (
                 collate_graphs(graphs),
                 torch.nn.utils.rnn.pack_sequence(questions, enforce_sorted=False),
+                vocab.concept_embeddings,
+                vocab.property_embeddings,
                 torch.tensor(targets),
                 torch.stack(instructionss),
             )

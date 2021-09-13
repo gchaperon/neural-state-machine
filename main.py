@@ -13,22 +13,19 @@ import logging
 def main(args):
     pprint(vars(args))
     pl.seed_everything(seed=123, workers=True)
-    datamodule = clevr.ClevrNoImagesDataModule(
-        "data", batch_size=args.batch_size, w_instructions=args.w_instructions, nhops=args.nhops
+
+    datamodule = clevr.ClevrWInstructionsDataModule(
+        "data", args.batch_size, nhops=args.nhops
     )
 
     # most params obtained via inspection of dataset
     model = NSMLightningModule(
         input_size=45,
         n_node_properties=4,
+        computation_steps = max(args.nhops) + 1,
+        encoded_question_size=45,
         # computation_steps=args.steps,
         output_size=28,
-        instruction_model_name=args.instruction_model_name,
-        instruction_model_kwargs={
-            "embedding_size": 45,
-            "n_instructions": max(args.nhops) + 2,
-            "encoded_question_size": args.encoded_question_size,
-        },
         learn_rate=args.learn_rate,
     )
     metric_to_track = "train_loss"
@@ -58,15 +55,15 @@ if __name__ == "__main__":
     )
     parser.add_argument("--batch-size", required=True, type=int)
     parser.add_argument("--learn-rate", default=0.001, type=float)
-    parser.add_argument("--encoded-question-size", required=True, type=int)
-    parser.add_argument(
-        "--instruction-model-name",
-        required=True,
-        choices=list(instruction_model_types.keys()),
-    )
-    parser.add_argument("--w-instructions", action="store_true", default=False)
+    # parser.add_argument("--encoded-question-size", required=True, type=int)
+    # parser.add_argument(
+    #     "--instruction-model-name",
+    #     required=True,
+    #     choices=list(instruction_model_types.keys()),
+    # )
+    # parser.add_argument("--w-instructions", action="store_true", default=False)
 
     args = parser.parse_args()
-    if args.w_instructions:
-        assert args.instruction_model_name == "dummy"
+#    if args.w_instructions:
+#        assert args.instruction_model_name == "dummy"
     main(args)

@@ -49,7 +49,7 @@ class InstructionDecoder(nn.Module):
             H: Hidden size (glove size)
             I: Number of instructions
         """
-        # Explicit better than implicit, amarite (?)
+        # Explicit better than implicit, amirite (?)
         hx: torch.Tensor = torch.zeros(
             input.size(0), self.rnn_cell.hidden_size, device=input.device
         )
@@ -71,10 +71,9 @@ class InstructionsModel(nn.Module):
         self.encoder = nn.LSTM(
             input_size=embedding_size, hidden_size=encoded_question_size, dropout=0.0
         )
-        self.decoder = InstructionDecoder(
-            input_size=encoded_question_size,
-            hidden_size=embedding_size,
-            n_instructions=n_instructions,
+        self.n_instructions = n_instructions
+        self.decoder = nn.RNN(
+            input_size=encoded_question_size, hidden_size=embedding_size, dropout=0.0
         )
         # Use softmax as nn.Module to allow extracting attention weights
         self.softmax = nn.Softmax(dim=-1)
@@ -83,32 +82,23 @@ class InstructionsModel(nn.Module):
     def encoded_question_size(self):
         return self.encoder.hidden_size
 
+    def extra_repr(self):
+        return f"(n_instructions): {self.n_instructions}"
+
     def forward(
         self, vocab: Tensor, question_batch: PackedSequence
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        # input should be a PackedSequence
         tagged = self.tagger(vocab, question_batch)
-        encoded = self.encoder(tagged)[1][0].squeeze(dim=0)  # get last hidden
-        hidden = self.decoder(encoded)
-        # Unpack sequences
-        tagged_unpacked, lens_unpacked = pad_packed_sequence(tagged, batch_first=True)
-        """ All this was to mask attention from padding values, f that
-        # Intermediate multiplication
-        tmp = hidden @ tagged_unpacked.transpose(1, 2)
-        # Mask values for softmax
-        max_seq_len = tagged_unpacked.size(1)
-        batch_size, n_instructions = hidden.size()[:2]
-        tmp[
-            torch.arange(batch_size).repeat_interleave(max_seq_len - lens_unpacked),
-            :,
-            torch.cat([torch.arange(l, max_seq_len) for l in lens_unpacked]),
-        ] = float("-inf")
-        # Instructions
-        # breakpoint()
-        instructions = self.softmax(tmp) @ tagged_unpacked
-        """
+        _, (encoded, _) = self.encoder(tagged)  # get last hidden
+        # B x Eqz
+        encoded = encoded.squeeze(dim=0)
+        # L x B x Ez
+        hidden, _ = self.decoder(encoded.expand(self.n_instructions, -1, -1))
+        # B x L x Ez
+        hidden = hidden.transpose(0, 1)
+        tagged_padded, _ = pad_packed_sequence(tagged, batch_first=True)
         instructions = (
-            self.softmax(hidden @ tagged_unpacked.transpose(1, 2)) @ tagged_unpacked
+            self.softmax(hidden @ tagged_padded.transpose(1, 2)) @ tagged_padded
         )
         return instructions, encoded
 
@@ -354,16 +344,19 @@ class NSM(nn.Module):
         self,
         input_size: int,
         n_node_properties: int,
+        computation_steps: int,
+        encoded_question_size: int,
         output_size: int,
-        instruction_model: Any,
         dropout: float = 0.0,
     ) -> None:
         super(NSM, self).__init__()
 
-        self.instructions_model = instruction_model
         self.nsm_cell = NSMCell(input_size, n_node_properties)
+        self.instructions_model = InstructionsModel(
+            input_size, computation_steps + 1, encoded_question_size
+        )
         self.classifier = AnswerClassifier(
-            input_size + instruction_model.encoded_question_size,
+            input_size + encoded_question_size,
             output_size,
             dropout=dropout,
         )
@@ -445,7 +438,8 @@ class NSM(nn.Module):
             dim_size=encoded_questions.size(0),
         )
         # B x 2H
-        return self.classifier(torch.hstack((encoded_questions, aggregated)))
+        predictions = self.classifier(torch.hstack((encoded_questions, aggregated)))
+        return predictions, instructions
 
 
 instruction_model_types = {
@@ -461,54 +455,115 @@ class NSMLightningModule(pl.LightningModule):
         self,
         input_size: int,
         n_node_properties: int,
+        computation_steps: int,
+        encoded_question_size: int,
         output_size: int,
-        instruction_model_name: Literal[
-            "normal", "dummy", "ff_encode_decoder", "desperation"
-        ],
-        instruction_model_kwargs: dict,
         dropout: float = 0.0,
         learn_rate: float = 1e-4,
+        instruction_loss_scaling: float = 100.0,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
-        instruction_model = instruction_model_types[instruction_model_name](
-            **instruction_model_kwargs
-        )
         self.nsm = NSM(
             input_size=input_size,
             n_node_properties=n_node_properties,
+            computation_steps=computation_steps,
+            encoded_question_size=encoded_question_size,
             output_size=output_size,
-            instruction_model=instruction_model,
             dropout=dropout,
         )
         self.learn_rate = learn_rate
+        self.instruction_loss_scaling = instruction_loss_scaling
 
     def forward(self, *args):
         return self.nsm(*args)
 
     def training_step(self, batch, batch_idx):
-        graphs, questions, concepts, properties, targets = batch
-        out = self(graphs, questions, concepts, properties)
-        loss = F.cross_entropy(out, targets)
-        running_acc = torch.sum(out.argmax(dim=1) == targets) / targets.size(0)
+        graphs, questions, concepts, properties, targets, gold_instructions = batch
+        predictions, generated_instructions = self(
+            graphs, questions, concepts, properties
+        )
+
+        loss = self._get_loss(
+            predictions, generated_instructions, targets, gold_instructions
+        )
+        running_acc = torch.sum(predictions.argmax(dim=1) == targets) / targets.size(0)
         self.log("train_loss", loss)
         self.log("running_train_acc", running_acc)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        graphs, questions, concepts, properties, targets = batch
-        out = self(graphs, questions, concepts, properties)
-        return out, targets
+        graphs, questions, concepts, properties, targets, gold_instructions = batch
+        predictions, generated_instructions = self(
+            graphs, questions, concepts, properties
+        )
+        return predictions, generated_instructions, targets, gold_instructions
 
     def validation_epoch_end(self, validation_step_outputs):
-        outs, targets = zip(*validation_step_outputs)
-        outs = torch.vstack(outs)
+        predictions, generated_instructions, targets, gold_instructions = zip(
+            *validation_step_outputs
+        )
+        predictions = torch.cat(predictions)
+        generated_instructions = torch.cat(generated_instructions)
         targets = torch.cat(targets)
-        loss = F.cross_entropy(outs, targets)
-        acc = torch.sum(outs.argmax(dim=1) == targets) / outs.size(0)
+        gold_instructions = torch.cat(gold_instructions)
+        loss = self._get_loss(
+            predictions, generated_instructions, targets, gold_instructions
+        )
+        acc = torch.sum(predictions.argmax(dim=1) == targets) / predictions.size(0)
         self.log("val_loss", loss)
         self.log("val_acc", acc)
-        return outs, targets
+        return predictions, targets
+
+    def _get_loss(
+        self, predictions, generated_instructions, targets, gold_instructions
+    ):
+        answer_loss = F.cross_entropy(predictions, targets)
+        instruction_loss = F.mse_loss(generated_instructions, gold_instructions)
+        loss = (answer_loss + self.instruction_loss_scaling * instruction_loss) / 2
+        return loss
+
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters(), lr=self.learn_rate)
+
+
+class InstructionsModelLightningModule(pl.LightningModule):
+    def __init__(
+        self,
+        embedding_size: int,
+        n_instructions: int,
+        encoded_question_size: int,
+        learn_rate: float,
+    ):
+        super().__init__()
+        self.save_hyperparameters()
+
+        self.model = InstructionsModel(
+            embedding_size, n_instructions, encoded_question_size
+        )
+        self.learn_rate = learn_rate
+
+    def forward(self, *args):
+        return self.model(*args)
+
+    def training_step(self, batch, batch_idx):
+        _, questions, concepts, _, _, gold_instructions = batch
+        instructions, encoded = self.model(concepts, questions)
+        loss = F.mse_loss(instructions, gold_instructions)
+        self.log("train_loss", loss)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        _, questions, concepts, _, _, gold_instructions = batch
+        instructions, encoded = self.model(concepts, questions)
+        return instructions, gold_instructions
+    
+    def validation_epoch_end(self, validation_step_outputs):
+        instructionss, gold_instructionss = zip(*validation_step_outputs)
+        instructions = torch.cat(instructionss)
+        gold_instructions = torch.cat(gold_instructionss)
+        loss = F.mse_loss(instructions, gold_instructions)
+        self.log("val_loss", loss)
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.learn_rate)
