@@ -348,6 +348,17 @@ class AnswerClassifier(nn.Module):
         z = self.fc_layers[1](z)
         return z
 
+class SimpleAnswerClassifier(nn.Module):
+    """This only applies to my clevr datasets, because of the embedding of
+    concepts and answers """
+    def __init__(self, input_size:int, output_size:int, dropout:float):
+        """Dummy args to keep compat"""
+        super().__init__()
+
+    def forward(self, input:Tensor) -> Tensor:
+        return input[:, :15]
+    
+
 
 class NSM(nn.Module):
     def __init__(
@@ -362,7 +373,7 @@ class NSM(nn.Module):
 
         self.instructions_model = instruction_model
         self.nsm_cell = NSMCell(input_size, n_node_properties)
-        self.classifier = AnswerClassifier(
+        self.classifier = SimpleAnswerClassifier(
             input_size + instruction_model.encoded_question_size,
             output_size,
             dropout=dropout,
