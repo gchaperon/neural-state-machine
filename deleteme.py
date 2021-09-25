@@ -1,25 +1,17 @@
-from nsm.model import NSMLightningModule
-from nsm.datasets.clevr import ClevrNoImagesDataModule
-import tqdm
-from pprint import pp
+from nsm.model import InstructionsModelLightningModule
+from nsm.datasets import ClevrWInstructionsDataModule
+import pytorch_lightning as pl
+import argparse
 
-print("print dev examples where NSM trained with my custom instruction fails")
+parser = argparse.ArgumentParser()
+parser.add_argument("--checkpoint", required=True)
+args = parser.parse_args()
 
-PATH = "remote_logs/version_11/checkpoints/epoch=609-step=600239.ckpt"
+datamodule = ClevrWInstructionsDataModule("data", batch_size=1, nhops=[0])
+model = InstructionsModelLightningModule.load_from_checkpoint(args.checkpoint)
 
-model = NSMLightningModule.load_from_checkpoint(PATH)
-datamodule = ClevrNoImagesDataModule("data", batch_size=128, w_instructions=True)
 datamodule.setup("validate")
 
-predicted = []
-targets = []
+for _, q_batch, vocab, *_ in datamodule.val_dataloader():
+    model(vocab, q_batch)
 
-for *input, target in tqdm.tqdm(datamodule.val_dataloader()):
-    out = model(*input)
-    targets += target.tolist()
-    predicted += out.argmax(1).tolist()
-
-wrong = [i for i, (p, t) in enumerate(zip(predicted, targets)) if p != t]
-print(wrong)
-breakpoint()
-pass
