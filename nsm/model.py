@@ -29,6 +29,14 @@ class Tagger(nn.Module):
         return f"embedding_size={self.weight.shape[0]}"
 
 
+class DummyTagger(nn.Module):
+    def __init__(self, embedding_size) -> None:
+        super().__init__()
+
+    def forward(self, vocab, question_batch):
+        return question_batch
+
+
 class InstructionDecoder(nn.Module):
     def __init__(
         self,
@@ -73,7 +81,10 @@ class InstructionsModel(nn.Module):
         )
         self.n_instructions = n_instructions
         self.decoder = nn.RNN(
-            input_size=encoded_question_size, hidden_size=embedding_size, dropout=0.0
+            input_size=encoded_question_size,
+            hidden_size=embedding_size,
+            nonlinearity="relu",
+            dropout=0.0,
         )
         # Use softmax as nn.Module to allow extracting attention weights
         self.softmax = nn.Softmax(dim=-1)
@@ -97,9 +108,8 @@ class InstructionsModel(nn.Module):
         # B x L x Ez
         hidden = hidden.transpose(0, 1)
         tagged_padded, _ = pad_packed_sequence(tagged, batch_first=True)
-        instructions = (
-            self.softmax(hidden @ tagged_padded.transpose(1, 2)) @ tagged_padded
-        )
+        attention = self.softmax(hidden @ tagged_padded.transpose(1, 2))
+        instructions = attention @ tagged_padded
         return instructions, encoded
 
 
@@ -557,7 +567,7 @@ class InstructionsModelLightningModule(pl.LightningModule):
         _, questions, concepts, _, _, gold_instructions = batch
         instructions, encoded = self.model(concepts, questions)
         return instructions, gold_instructions
-    
+
     def validation_epoch_end(self, validation_step_outputs):
         instructionss, gold_instructionss = zip(*validation_step_outputs)
         instructions = torch.cat(instructionss)

@@ -271,12 +271,11 @@ class ClevrNoImagesDataset(data.Dataset):
             }
 
     def __getitem__(self, key: int):
-        question = self.questions[key]
-        scene = self.scenes[question["image_index"]]
+        graph, polish, answer = self.get_raw(key)
         return (
-            self.vocab.embed(scene_to_graph(scene, self.vocab)),
-            self.vocab.embed(program_to_polish(question["program"])),
-            self.vocab.answers.index(question["answer"]),
+            self.vocab.embed(graph),
+            self.vocab.embed(polish),
+            self.vocab.answers.index(answer),
         )
 
     def get_raw(self, key: int):
@@ -284,7 +283,8 @@ class ClevrNoImagesDataset(data.Dataset):
         scene = self.scenes[question["image_index"]]
         return (
             scene_to_graph(scene, self.vocab),
-            program_to_polish(question["program"]),
+            # filter "scene", which is always the last word/token
+            program_to_polish(question["program"])[:-1],
             question["answer"],
         )
 
