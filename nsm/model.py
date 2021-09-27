@@ -29,13 +29,6 @@ class Tagger(nn.Module):
         return f"embedding_size={self.weight.shape[0]}"
 
 
-class DummyTagger(nn.Module):
-    def __init__(self, embedding_size) -> None:
-        super().__init__()
-
-    def forward(self, vocab, question_batch):
-        return question_batch
-
 
 class InstructionDecoder(nn.Module):
     def __init__(
@@ -361,10 +354,10 @@ class NSM(nn.Module):
     ) -> None:
         super(NSM, self).__init__()
 
-        self.nsm_cell = NSMCell(input_size, n_node_properties)
         self.instructions_model = InstructionsModel(
             input_size, computation_steps + 1, encoded_question_size
         )
+        self.nsm_cell = NSMCell(input_size, n_node_properties)
         self.classifier = AnswerClassifier(
             input_size + encoded_question_size,
             output_size,
@@ -494,9 +487,10 @@ class NSMLightningModule(pl.LightningModule):
             graphs, questions, concepts, properties
         )
 
-        loss = self._get_loss(
-            predictions, generated_instructions, targets, gold_instructions
-        )
+        # loss = self._get_loss(
+        #     predictions, generated_instructions, targets, gold_instructions
+        # )
+        loss = F.cross_entropy(predictions, targets)
         running_acc = torch.sum(predictions.argmax(dim=1) == targets) / targets.size(0)
         self.log("train_loss", loss)
         self.log("running_train_acc", running_acc)
@@ -517,9 +511,10 @@ class NSMLightningModule(pl.LightningModule):
         generated_instructions = torch.cat(generated_instructions)
         targets = torch.cat(targets)
         gold_instructions = torch.cat(gold_instructions)
-        loss = self._get_loss(
-            predictions, generated_instructions, targets, gold_instructions
-        )
+        # loss = self._get_loss(
+        #     predictions, generated_instructions, targets, gold_instructions
+        # )
+        loss = F.cross_entropy(predictions, targets)
         acc = torch.sum(predictions.argmax(dim=1) == targets) / predictions.size(0)
         self.log("val_loss", loss)
         self.log("val_acc", acc)
