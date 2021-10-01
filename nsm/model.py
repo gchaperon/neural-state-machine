@@ -7,6 +7,16 @@ from torch import Tensor
 from torch.nn.utils.rnn import PackedSequence, pad_packed_sequence
 from torch_scatter import scatter_sum
 from nsm.utils import Batch, scatter_softmax
+import contextlib
+
+@contextlib.contextmanager
+def allow_non_deterministic():
+    prev_state = torch.are_deterministic_algorithms_enabled()
+    try:
+        torch.use_deterministic_algorithms(False)
+        yield
+    finally:
+        torch.use_deterministic_algorithms(prev_state)
 
 
 class Tagger(nn.Module):
@@ -284,30 +294,31 @@ class NSMCell(nn.Module):
             # H x H
             @ self.weight_edge
         )
-        # Compute state component for next distribution
-        # N
-        next_distribution_states = scatter_softmax(
-            # N x H       H
-            node_scores @ self.weight_node_score,
-            graph_batch.node_indices,
-            dim=0,
-        )
-        # Compute neighbour component for next distribution
-        # N
-        next_distribution_relations = scatter_softmax(
-            # N x H
-            scatter_sum(
-                # E x 1                                           E x H
-                distribution[graph_batch.edge_indices[0], None] * edge_scores,
-                graph_batch.edge_indices[1],
+        with allow_non_deterministic():
+            # Compute state component for next distribution
+            # N
+            next_distribution_states = scatter_softmax(
+                # N x H       H
+                node_scores @ self.weight_node_score,
+                graph_batch.node_indices,
                 dim=0,
-                dim_size=graph_batch.node_indices.size(0),
             )
-            # H
-            @ self.weight_relation_score,
-            graph_batch.node_indices,
-            dim=0,
-        )
+            # Compute neighbour component for next distribution
+            # N
+            next_distribution_relations = scatter_softmax(
+                # N x H
+                scatter_sum(
+                    # E x 1                                           E x H
+                    distribution[graph_batch.edge_indices[0], None] * edge_scores,
+                    graph_batch.edge_indices[1],
+                    dim=0,
+                    dim_size=graph_batch.node_indices.size(0),
+                )
+                # H
+                @ self.weight_relation_score,
+                graph_batch.node_indices,
+                dim=0,
+            )
 
         # Compute next distribution
         # N
@@ -429,17 +440,18 @@ class NSM(nn.Module):
             instructions[:, -1] @ property_embeddings.T, dim=1
         )[:, :-1]
         # B x H
-        aggregated = scatter_sum(
-            distribution[:, None]
-            * torch.sum(
-                node_prop_similarities[graph_batch.node_indices, :, None]
-                * graph_batch.node_attrs,
-                dim=1,
-            ),
-            graph_batch.node_indices,
-            dim=0,
-            dim_size=encoded_questions.size(0),
-        )
+        with allow_non_deterministic():
+            aggregated = scatter_sum(
+                distribution[:, None]
+                * torch.sum(
+                    node_prop_similarities[graph_batch.node_indices, :, None]
+                    * graph_batch.node_attrs,
+                    dim=1,
+                ),
+                graph_batch.node_indices,
+                dim=0,
+                dim_size=encoded_questions.size(0),
+            )
         # B x 2H
         predictions = self.classifier(torch.hstack((encoded_questions, aggregated)))
         return predictions, instructions

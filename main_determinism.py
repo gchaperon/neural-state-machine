@@ -13,11 +13,6 @@ import logging
 import random
 
 
-LRS = [5e-5, 1e-4, 5e-4, 1e-3]
-BSIZES = [16, 32, 64, 128]
-ENCODED_SIZES = [45, 100, 200, 1000]
-Args = collections.namedtuple("Args", "learn_rate, batch_size, encoded_size")
-
 
 def main():
     os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
@@ -25,31 +20,25 @@ def main():
     pl.seed_everything(seed=123, workers=True)
     logging.basicConfig(level=logging.INFO)
 
-    for args in (
-        Args(*t)
-        for t in random.sample(
-            list(itertools.product(LRS, BSIZES, ENCODED_SIZES)), k=16
-        )
-    ):
-        print(args)
+    for _ in range(3):
         datamodule = clevr.ClevrWInstructionsDataModule(
-            "data", args.batch_size, nhops=[0]
+            "data", batch_size=16, nhops=[0]
         )
         # most params obtained via inspection of dataset
         model = NSMLightningModule(
             input_size=45,
             n_node_properties=4,
             computation_steps=0 + 1,  # lul
-            encoded_question_size=args.encoded_size,
+            encoded_question_size=100,
             output_size=28,
-            learn_rate=args.learn_rate,
+            learn_rate=0.001,
         )
         metric_to_track = "train_loss"
         trainer = pl.Trainer(
             gpus=-1 if torch.cuda.is_available() else 0,
             max_epochs=1000,
             callbacks=[
-                pl.callbacks.EarlyStopping(monitor=metric_to_track, patience=100),
+                pl.callbacks.EarlyStopping(monitor=metric_to_track, patience=300),
                 pl.callbacks.ModelCheckpoint(monitor=metric_to_track),
             ],
         )
