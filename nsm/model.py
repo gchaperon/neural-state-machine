@@ -113,6 +113,7 @@ class InstructionsModel(nn.Module):
         tagged_padded, _ = pad_packed_sequence(tagged, batch_first=True)
         attention = self.softmax(hidden @ tagged_padded.transpose(1, 2))
         instructions = attention @ tagged_padded
+        # breakpoint()
         return instructions, encoded
 
 

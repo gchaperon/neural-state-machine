@@ -20,29 +20,28 @@ def main():
     pl.seed_everything(seed=123, workers=True)
     logging.basicConfig(level=logging.INFO)
 
-    for _ in range(3):
-        datamodule = clevr.ClevrWInstructionsDataModule(
-            "data", batch_size=16, nhops=[0]
-        )
-        # most params obtained via inspection of dataset
-        model = NSMLightningModule(
-            input_size=45,
-            n_node_properties=4,
-            computation_steps=0 + 1,  # lul
-            encoded_question_size=100,
-            output_size=28,
-            learn_rate=0.001,
-        )
-        metric_to_track = "train_loss"
-        trainer = pl.Trainer(
-            gpus=-1 if torch.cuda.is_available() else 0,
-            max_epochs=1000,
-            callbacks=[
-                pl.callbacks.EarlyStopping(monitor=metric_to_track, patience=300),
-                pl.callbacks.ModelCheckpoint(monitor=metric_to_track),
-            ],
-        )
-        trainer.fit(model, datamodule)
+    datamodule = clevr.ClevrWInstructionsDataModule(
+        "data", batch_size=16, nhops=[0]
+    )
+    # most params obtained via inspection of dataset
+    model = NSMLightningModule(
+        input_size=45,
+        n_node_properties=4,
+        computation_steps=0 + 1,  # lul
+        encoded_question_size=100,
+        output_size=28,
+        learn_rate=0.001,
+    )
+    metric_to_track = "train_loss"
+    trainer = pl.Trainer(
+        gpus=-1 if torch.cuda.is_available() else 0,
+        max_epochs=1000,
+        callbacks=[
+            pl.callbacks.EarlyStopping(monitor=metric_to_track, patience=300),
+            pl.callbacks.ModelCheckpoint(monitor=metric_to_track),
+        ],
+    )
+    trainer.fit(model, datamodule)
 
 
 if __name__ == "__main__":
