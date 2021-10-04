@@ -15,22 +15,23 @@ import random
 
 LRS = [5e-5, 1e-4, 5e-4, 1e-3]
 BSIZES = [16, 32, 64, 128]
-ENCODED_SIZES = [45, 100, 200, 1000]
-Args = collections.namedtuple("Args", "learn_rate, batch_size, encoded_size")
+ENCODED_SIZES = [45, 100, 200, 500]
+INSTRUCTION_LOSS_SCALINGS = [10, 50, 100]
+Args = collections.namedtuple("Args", "learn_rate, batch_size, encoded_size, instruction_loss_scaling")
 
 
 def main():
-    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
-    torch.use_deterministic_algorithms(True)
-    pl.seed_everything(seed=123, workers=True)
-    logging.basicConfig(level=logging.INFO)
-
     for args in (
         Args(*t)
         for t in random.sample(
-            list(itertools.product(LRS, BSIZES, ENCODED_SIZES)), k=16
+            list(itertools.product(LRS, BSIZES, ENCODED_SIZES, INSTRUCTION_LOSS_SCALINGS)), k=16
         )
     ):
+        os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+        torch.use_deterministic_algorithms(True)
+        pl.seed_everything(seed=123, workers=True)
+        logging.basicConfig(level=logging.INFO)
+
         print(args)
         datamodule = clevr.ClevrWInstructionsDataModule(
             "data", args.batch_size, nhops=[0]
@@ -43,6 +44,7 @@ def main():
             encoded_question_size=args.encoded_size,
             output_size=28,
             learn_rate=args.learn_rate,
+            instruction_loss_scaling=args.instruction_loss_scaling,
         )
         metric_to_track = "train_loss"
         trainer = pl.Trainer(

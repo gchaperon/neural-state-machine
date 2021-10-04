@@ -500,10 +500,10 @@ class NSMLightningModule(pl.LightningModule):
             graphs, questions, concepts, properties
         )
 
-        # loss = self._get_loss(
-        #     predictions, generated_instructions, targets, gold_instructions
-        # )
-        loss = F.cross_entropy(predictions, targets)
+        loss = self._get_loss(
+            predictions, generated_instructions, targets, gold_instructions
+        )
+        # loss = F.cross_entropy(predictions, targets)
         running_acc = torch.sum(predictions.argmax(dim=1) == targets) / targets.size(0)
         self.log("train_loss", loss)
         self.log("running_train_acc", running_acc)
@@ -524,10 +524,10 @@ class NSMLightningModule(pl.LightningModule):
         generated_instructions = torch.cat(generated_instructions)
         targets = torch.cat(targets)
         gold_instructions = torch.cat(gold_instructions)
-        # loss = self._get_loss(
-        #     predictions, generated_instructions, targets, gold_instructions
-        # )
-        loss = F.cross_entropy(predictions, targets)
+        loss = self._get_loss(
+            predictions, generated_instructions, targets, gold_instructions
+        )
+        # loss = F.cross_entropy(predictions, targets)
         acc = torch.sum(predictions.argmax(dim=1) == targets) / predictions.size(0)
         self.log("val_loss", loss)
         self.log("val_acc", acc)
