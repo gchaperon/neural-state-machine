@@ -477,6 +477,7 @@ class NSMLightningModule(pl.LightningModule):
         dropout: float = 0.0,
         learn_rate: float = 1e-4,
         instruction_loss_scaling: float = 100.0,
+        use_instruction_loss: bool = False,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
@@ -490,6 +491,7 @@ class NSMLightningModule(pl.LightningModule):
         )
         self.learn_rate = learn_rate
         self.instruction_loss_scaling = instruction_loss_scaling
+        self.use_instruction_loss = use_instruction_loss
 
     def forward(self, *args):
         return self.nsm(*args)
@@ -537,8 +539,11 @@ class NSMLightningModule(pl.LightningModule):
         self, predictions, generated_instructions, targets, gold_instructions
     ):
         answer_loss = F.cross_entropy(predictions, targets)
-        instruction_loss = F.mse_loss(generated_instructions, gold_instructions)
-        loss = (answer_loss + self.instruction_loss_scaling * instruction_loss) / 2
+        if self.use_instruction_loss:
+            instruction_loss = F.mse_loss(generated_instructions, gold_instructions)
+            loss = (answer_loss + self.instruction_loss_scaling * instruction_loss) / 2
+        else:
+            loss = answer_loss
         return loss
 
     def configure_optimizers(self):

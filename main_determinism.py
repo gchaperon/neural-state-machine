@@ -31,6 +31,7 @@ def main():
         encoded_question_size=100,
         output_size=28,
         learn_rate=0.001,
+        use_instruction_loss=False,
     )
     metric_to_track = "train_loss"
     trainer = pl.Trainer(
@@ -38,7 +39,7 @@ def main():
         max_epochs=1000,
         callbacks=[
             pl.callbacks.EarlyStopping(monitor=metric_to_track, patience=300),
-            pl.callbacks.ModelCheckpoint(monitor=metric_to_track),
+            pl.callbacks.ModelCheckpoint(save_top_k=-1,every_n_epochs=50),
         ],
     )
     trainer.fit(model, datamodule)
