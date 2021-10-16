@@ -210,7 +210,7 @@ class DummyInstructionsModel(nn.Module):
         ), "all question lengths must be the same for DummyInstructionsModel"
         batch_size, n_instructions, embedding_size = instructions.shape
 
-        # This check is not necessary for this dummy model
+        # This check is actually not necessary for this dummy model
         assert self.n_instructions == n_instructions
         return instructions, encoded or torch.zeros(
             batch_size, self.encoded_question_size, device=vocab.device
