@@ -50,7 +50,8 @@ def main_freeze_instructions(args):
     nsm_model.nsm.instructions_model.load_state_dict(
         instructions_model.model.state_dict()
     )
-    nsm_model.nsm.instructions_model.requires_grad_(False).eval()
+    if not args.fine_tune:
+        nsm_model.nsm.instructions_model.requires_grad_(False).eval()
 
     trainer_nsm = pl.Trainer(
         gpus=-1 if torch.cuda.is_available() else 0,
@@ -103,13 +104,13 @@ def main_freeze_automaton(args):
     )
     trainer_automaton = pl.Trainer(
         gpus=-1 if torch.cuda.is_available() else 0,
-        max_epochs=1,  # remember to set to  10, not 1
+        max_epochs=10,
         callbacks=[
             pl.callbacks.EarlyStopping(monitor="train_loss", patience=3),
             pl.callbacks.ModelCheckpoint(monitor="train_loss"),
         ],
     )
-    # trainer_automaton.fit(nsm_dummy_ins, datamodule)
+    trainer_automaton.fit(nsm_dummy_ins, datamodule)
 
     # lead trained weight from the automaton to the nsm
     datamodule = ClevrWInstructionsDataModule(
@@ -125,14 +126,14 @@ def main_freeze_automaton(args):
         use_instruction_loss=False,
     )
     nsm_model.nsm.nsm_cell.load_state_dict(nsm_dummy_ins.nsm.nsm_cell.state_dict())
-    nsm_model.nsm.nsm_cell.requires_grad_(False).eval()
     nsm_model.nsm.classifier.load_state_dict(nsm_dummy_ins.nsm.classifier.state_dict())
-    nsm_model.nsm.classifier.requires_grad_(False).eval()
+    if not args.fine_tune:
+        nsm_model.nsm.nsm_cell.requires_grad_(False).eval()
+        nsm_model.nsm.classifier.requires_grad_(False).eval()
 
-    breakpoint()
     trainer_nsm = pl.Trainer(
         gpus=-1 if torch.cuda.is_available() else 0,
-        max_epochs=1000,  # remember to set to  10, not 1
+        max_epochs=1000,
         callbacks=[
             pl.callbacks.EarlyStopping(monitor="train_loss", patience=200),
             pl.callbacks.ModelCheckpoint(monitor="train_loss"),
@@ -153,12 +154,14 @@ if __name__ == "__main__":
     parser_freeze_instructions = subparsers.add_parser("instructions")
     parser_freeze_instructions.add_argument("--batch-size", type=int, required=True)
     parser_freeze_instructions.add_argument("--learn-rate", type=float, required=True)
+    parser_freeze_instructions.add_argument("--fine-tune", action="store_true")
     parser_freeze_instructions.set_defaults(func=main_freeze_instructions)
 
     # freezin automaton also freezes the answer classifier
     parser_freeze_automaton = subparsers.add_parser("automaton")
     parser_freeze_automaton.add_argument("--batch-size", type=int, required=True)
     parser_freeze_automaton.add_argument("--learn-rate", type=float, required=True)
+    parser_freeze_automaton.add_argument("--fine-tune", action="store_true")
     parser_freeze_automaton.set_defaults(func=main_freeze_automaton)
 
     args = parser.parse_args()
