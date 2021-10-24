@@ -74,8 +74,9 @@ class Vocab:
         "relate_filter_unique",
     ]
 
-    def __init__(self, metadata_path: tp.Union[str, Path]):
+    def __init__(self, metadata_path: tp.Union[str, Path], prop_embed_const: float):
         self.metadata_path = Path(metadata_path)
+        self.prop_embed_const = prop_embed_const
         if not self.metadata_path.exists():
             data_utils.download(
                 self.METADATA_URL,
@@ -153,7 +154,7 @@ class Vocab:
             # softmax leaving dirty results because the difference between 0 and
             # 1 is too small
             # 5 seems to be a reasonable value
-            out[i, start : start + len_] = int(os.environ["PROP_EMBEDS_CONST"])
+            out[i, start : start + len_] = self.prop_embed_const
             start += len_
         return out
 
@@ -252,10 +253,11 @@ class ClevrNoImagesDataset(data.Dataset):
         split: tp.Literal["train", "val"],
         download: bool = False,
         filter_fn: tp.Optional[tp.Callable] = None,
+        prop_embeds_const: float = 5.0,
     ):
         self.paths = self.Paths(datadir)
         self.split = split
-        self.vocab = Vocab(self.paths.metadata_path)
+        self.vocab = Vocab(self.paths.metadata_path, prop_embeds_const)
 
         if download:
             self.download(datadir)
@@ -326,7 +328,12 @@ class ClevrWInstructions(ClevrNoImagesDataset):
     """Change the way questions are embedded, generate instructions directly"""
 
     def __init__(
-        self, datadir, split, download=False, nhops: tp.Optional[tp.List[int]] = None
+        self,
+        datadir,
+        split,
+        download=False,
+        nhops: tp.Optional[tp.List[int]] = None,
+        prop_embeds_const: float = 5.0,
     ):
         self.nhops = nhops or list(NHOPS_TO_CATS.keys())
         cats = [cat for hop in self.nhops for cat in NHOPS_TO_CATS[hop]]
@@ -334,7 +341,13 @@ class ClevrWInstructions(ClevrNoImagesDataset):
         def filter_fn(question):
             return question["question_family_index"] in cats
 
-        super().__init__(datadir, split, download, filter_fn=filter_fn)
+        super().__init__(
+            datadir,
+            split,
+            download,
+            filter_fn=filter_fn,
+            prop_embeds_const=prop_embeds_const,
+        )
 
     def __getitem__(self, key):
         graph, question, answer = self.get_raw(key)
