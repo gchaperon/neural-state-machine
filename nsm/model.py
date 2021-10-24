@@ -328,6 +328,7 @@ class NSMCell(nn.Module):
             + (1 - relation_similarity[graph_batch.node_indices])
             * next_distribution_states
         )
+        # breakpoint()
         return next_distribution
 
 
@@ -428,6 +429,7 @@ class NSM(nn.Module):
                 foo := F.softmax(instruction_batch @ property_embeddings.T, dim=1)
             )[:, :-1], foo[:, -1]
             # N
+            # breakpoint()
             distribution = self.nsm_cell(
                 graph_batch,
                 instruction_batch,

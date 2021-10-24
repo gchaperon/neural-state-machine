@@ -8,6 +8,7 @@ import nsm.datasets.synthetic as syn
 import pytorch_lightning as pl
 import torch
 import argparse
+import os
 
 
 def main_freeze_instructions(args):
@@ -155,6 +156,9 @@ if __name__ == "__main__":
     parser_freeze_instructions.add_argument("--batch-size", type=int, required=True)
     parser_freeze_instructions.add_argument("--learn-rate", type=float, required=True)
     parser_freeze_instructions.add_argument("--fine-tune", action="store_true")
+    parser_freeze_instructions.add_argument(
+        "--prop-embeds-const", type=int, required=True
+    )
     parser_freeze_instructions.set_defaults(func=main_freeze_instructions)
 
     # freezin automaton also freezes the answer classifier
@@ -162,7 +166,9 @@ if __name__ == "__main__":
     parser_freeze_automaton.add_argument("--batch-size", type=int, required=True)
     parser_freeze_automaton.add_argument("--learn-rate", type=float, required=True)
     parser_freeze_automaton.add_argument("--fine-tune", action="store_true")
+    parser_freeze_automaton.add_argument("--prop-embeds-const", type=int, required=True)
     parser_freeze_automaton.set_defaults(func=main_freeze_automaton)
 
     args = parser.parse_args()
+    os.environ["PROP_EMBEDS_CONST"] = str(args.prop_embeds_const)
     args.func(args)

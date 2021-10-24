@@ -148,7 +148,12 @@ class Vocab:
         lens = [len(self.grouped_attributes[prop]) for prop in self.properties]
         start = 0
         for i, len_ in enumerate(lens):
-            out[i, start : start + len_] = 10 ** 6
+            # pay attention to the magnitude of the values here, 1e6 might mess
+            # things up, and 1 might not be enough so that softmax to avoid
+            # softmax leaving dirty results because the difference between 0 and
+            # 1 is too small
+            # 5 seems to be a reasonable value
+            out[i, start : start + len_] = int(os.environ["PROP_EMBEDS_CONST"])
             start += len_
         return out
 
