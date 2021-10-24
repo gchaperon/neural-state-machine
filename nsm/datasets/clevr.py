@@ -534,11 +534,12 @@ def is_gud_for_nsm(question):
 
 
 class ClevrWInstructionsDataModule(pl.LightningDataModule):
-    def __init__(self, datadir, batch_size, nhops=None):
+    def __init__(self, datadir, batch_size, prop_embeds_const, nhops=None):
         super().__init__()
         self.datadir = datadir
         self.batch_size = batch_size
         self.nhops = nhops
+        self.prop_embeds_const = prop_embeds_const
 
     def prepare_data(self):
         ClevrWInstructions.download(self.datadir)
@@ -546,11 +547,17 @@ class ClevrWInstructionsDataModule(pl.LightningDataModule):
     def setup(self, stage):
         if stage in ("fit", "validate", None):
             self.clevr_val = ClevrWInstructions(
-                self.datadir, split="val", nhops=self.nhops
+                self.datadir,
+                split="val",
+                nhops=self.nhops,
+                prop_embeds_const=self.prop_embeds_const,
             )
         if stage in ("fit", None):
             self.clevr_train = ClevrWInstructions(
-                self.datadir, split="train", nhops=self.nhops
+                self.datadir,
+                split="train",
+                nhops=self.nhops,
+                prop_embeds_const=self.prop_embeds_const,
             )
 
     def _get_dataloader(self, split: tp.Literal["train", "val"]):
