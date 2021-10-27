@@ -376,6 +376,8 @@ class ClevrWInstructions(ClevrNoImagesDataset):
             instructions.append(vocab.embed(group).sum(0))
         # last instruction, check which property is beeing queried
         # "query_color" -> "color"
+        # NOTE: this might not be necessary since I changed the magnitude of
+        # the prop embeddings
         # normalize to keep l2 loss reasonable when using generated instructions
         # as supervision
         prop = question[0].split("_")[1]
@@ -534,8 +536,15 @@ def is_gud_for_nsm(question):
 
 
 class ClevrWInstructionsDataModule(pl.LightningDataModule):
-    def __init__(self, datadir, batch_size, prop_embeds_const, nhops=None):
+    def __init__(
+        self,
+        datadir: str,
+        batch_size: int,
+        prop_embeds_const: float,
+        nhops: tp.Optional[tp.List[int]] = None,
+    ):
         super().__init__()
+        self.save_hyperparameters(ignore=("datadir", ))
         self.datadir = datadir
         self.batch_size = batch_size
         self.nhops = nhops

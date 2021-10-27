@@ -27,24 +27,29 @@ def main(args):
 
     print(args)
     datamodule = clevr.ClevrWInstructionsDataModule(
-        "data", args.batch_size, nhops=[0], prop_embeds_const=args.prop_embeds_const
+        "data",
+        args.batch_size,
+        nhops=args.nhops,
+        prop_embeds_const=args.prop_embeds_const,
     )
     # most params obtained via inspection of dataset
     model = NSMLightningModule(
         input_size=45,
         n_node_properties=4,
-        computation_steps=0 + 1,  # lul
+        computation_steps=max(args.nhops) + 1,
         encoded_question_size=args.encoded_size,
         output_size=28,
         learn_rate=args.learn_rate,
-        use_instruction_loss=args.use_instruction_loss,
+        use_instruction_loss=False,
     )
     metric_to_track = "train_loss"
     trainer = pl.Trainer(
         gpus=-1 if torch.cuda.is_available() else 0,
         max_epochs=1000,
         callbacks=[
-            pl.callbacks.EarlyStopping(monitor=metric_to_track, patience=50),
+            pl.callbacks.EarlyStopping(
+                monitor=metric_to_track, patience=50, stopping_threshold=1e-3
+            ),
             pl.callbacks.ModelCheckpoint(monitor=metric_to_track),
         ],
     )
@@ -55,9 +60,17 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--encoded-size", type=int, default=100)
-    parser.add_argument("--prop-embeds-const", type=float, required=True)
-    parser.add_argument("--learn-rate", type=float, required=True)
-    parser.add_argument("--use-instruction-loss", action="store_true")
+    parser.add_argument("--prop-embeds-const", type=float, default=5.)
+    parser.add_argument("--learn-rate", type=float, default=0.001)
+    # parser.add_argument("--use-instruction-loss", action="store_true")
+
+    parser.add_argument(
+        "--nhops",
+        nargs="+",
+        type=int,
+        choices=clevr.NHOPS_TO_CATS.keys(),
+        default=list(clevr.NHOPS_TO_CATS.keys()),
+    )
 
     args = parser.parse_args()
     main(args)
