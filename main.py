@@ -26,15 +26,16 @@ def main(args):
     logging.basicConfig(level=logging.INFO)
 
     print(args)
-    datamodule = clevr.ClevrWInstructionsDataModule(
+    datamodule = clevr.ClevrGloveDataModule(
         "data",
         args.batch_size,
+        args.glove_dim,
         nhops=args.nhops,
-        prop_embeds_const=args.prop_embeds_const,
+        question_type=args.question_type,
     )
     # most params obtained via inspection of dataset
     model = NSMLightningModule(
-        input_size=45,
+        input_size=args.glove_dim,
         n_node_properties=4,
         computation_steps=args.computation_steps,
         encoded_question_size=args.encoded_size,
@@ -60,8 +61,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--encoded-size", type=int, default=100)
-    parser.add_argument("--prop-embeds-const", type=float, default=5.)
-    parser.add_argument("--learn-rate", type=float, default=0.0005)
+    parser.add_argument("--prop-embeds-const", type=float, default=5.0)
+    parser.add_argument("--learn-rate", type=float, default=0.001)
     # parser.add_argument("--use-instruction-loss", action="store_true")
 
     parser.add_argument(
@@ -72,6 +73,12 @@ if __name__ == "__main__":
         default=list(clevr.NHOPS_TO_CATS.keys()),
     )
     parser.add_argument("--computation-steps", type=int, required=True)
+    parser.add_argument(
+        "--glove-dim", type=int, required=True, choices=(50, 100, 200, 300)
+    )
+    parser.add_argument(
+        "--question-type", required=True, choices=("program", "question")
+    )
 
     args = parser.parse_args()
     assert args.computation_steps >= max(args.nhops) + 1

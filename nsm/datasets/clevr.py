@@ -8,6 +8,7 @@ import pytorch_lightning as pl
 from pathlib import Path
 import typing as tp
 import zipfile
+import re
 import json
 from . import utils as data_utils
 from operator import itemgetter, eq, ne
@@ -18,10 +19,9 @@ from functools import (
     cached_property,
     lru_cache,
 )
+import abc
 from nsm.utils import Graph, NSMItem, collate_nsmitems, collate_graphs
-import collections.abc as abc
-
-
+import collections
 import pydantic
 
 
@@ -55,12 +55,94 @@ NHOPS_TO_CATS = {
 ALL_EASY_CATS = [cat for range_ in NHOPS_TO_CATS.values() for cat in range_]
 
 
+class Glove:
+
+    DATA_URL = "https://nlp.stanford.edu/data/glove.6B.zip"
+
+    class Paths:
+        NAME = "glove"
+        ZIP_NAME = "glove.6B.zip"
+        FILE_TEMPLATE = "glove.6B.{dim}d.txt"
+
+        def __init__(self, datadir: str):
+            self.datadir = Path(datadir)
+
+        @property
+        def root(self):
+            return self.datadir / self.NAME
+
+        @property
+        def zip_path(self):
+            return self.root / self.ZIP_NAME
+
+        def file_path(self, dim):
+            return self.root / self.FILE_TEMPLATE.format(dim=dim)
+
+    tok2vec: tp.Dict[str, list]
+
+    def __init__(self, datadir: str, dim: tp.Literal[50, 100, 200, 300]):
+        self.paths = self.Paths(datadir)
+        self.dim = dim
+
+        if not self.paths.file_path(dim).exists():
+            if not self.paths.zip_path.exists():
+                logger.info("Downloading Glove")
+                self.paths.root.mkdir(parents=True, exist_ok=True)
+                data_utils.download(
+                    self.DATA_URL,
+                    self.paths.zip_path,
+                    progress=logger.isEnabledFor(logging.INFO),
+                )
+            logger.info("Extracting Glove")
+            with zipfile.ZipFile(self.paths.zip_path) as myzip:
+                myzip.extractall(path=self.paths.root)
+            logger.info("Done!")
+
+        logger.info(f"Loading {self.paths.file_path(dim)}")
+        with open(self.paths.file_path(dim)) as vec_file:
+            self.tok2vec = {
+                token: tuple(map(float, vector))
+                for token, *vector in map(str.split, vec_file)
+            }
+        logger.info("Done!")
+
+    def __repr__(self):
+        return type(self).__name__ + f"(datadir={self.paths.datadir!r}, dim={self.dim})"
+
+    @singledispatchmethod
+    def embed(self, arg):
+        raise NotImplementedError(f"Unable to embed type {type(arg)}")
+
+    @embed.register
+    @lru_cache
+    def _(self, token: str) -> torch.Tensor:
+        try:
+            return torch.tensor(self.tok2vec[token])
+        except KeyError:
+            raise ValueError(f"Unable to embed {token=}") from None
+
+    @embed.register
+    def _(self, tokens: collections.abc.Sequence) -> torch.Tensor:
+        return (
+            torch.stack([self.embed(token) for token in tokens])
+            if tokens
+            else torch.empty(0, self.dim)
+        )
+
+    @embed.register
+    def _(self, graph: Graph) -> Graph:
+        node_attrs, edge_indices, edge_attrs = graph
+        return Graph(
+            self.embed(node_attrs), torch.tensor(edge_indices).T, self.embed(edge_attrs)
+        )
+
+
 class Vocab:
     METADATA_URL = (
         "https://raw.githubusercontent.com/facebookresearch"
         "/clevr-dataset-gen/master/question_generation/metadata.json"
     )
-    # Some functions defined in metdata.json where used only for the generation process
+    # Some functions defined in metadata.json where used only for the generation process
     # and are not present in the final version
     SKIPPED_FNS = [
         "equal_object",
@@ -73,6 +155,10 @@ class Vocab:
         "relate_filter_exist",
         "relate_filter_unique",
     ]
+
+    metadata_path: Path
+    metadata: dict
+    prop_embed_const: float
 
     def __init__(self, metadata_path: tp.Union[str, Path], prop_embed_const: float):
         self.metadata_path = Path(metadata_path)
@@ -178,7 +264,7 @@ class Vocab:
             raise ValueError(f"Unable to embed {token=}")
 
     @embed.register
-    def _(self, tokens: abc.Sequence) -> torch.Tensor:
+    def _(self, tokens: collections.abc.Sequence) -> torch.Tensor:
         return torch.stack([self.embed(token) for token in tokens])
 
     @embed.register
@@ -187,6 +273,28 @@ class Vocab:
         return Graph(
             self.embed(node_attrs), torch.tensor(edge_indices).T, self.embed(edge_attrs)
         )
+
+
+class GloveVocab(Glove, Vocab):
+    def __init__(self, datadir, dim, metadata_path):
+        super(GloveVocab, self).__init__(datadir, dim)
+        # prop_embed_const is unused here
+        super(Glove, self).__init__(metadata_path, prop_embed_const=0.0)
+
+    # first property embedding heuristic
+    @cached_property
+    def property_embeddings(self):
+        return self.embed(list(self.grouped_attributes.keys()))
+
+    # second heuristic, use average
+    # @cached_property
+    # def property_embeddings(self):
+    #     return torch.stack(
+    #         [
+    #             self.embed(self.grouped_attributes[prop]).mean(dim=0)
+    #             for prop in self.properties
+    #         ]
+    #     )
 
 
 def scene_to_graph(scene: dict, vocab: Vocab) -> Graph:
@@ -322,6 +430,43 @@ class ClevrNoImagesDataset(data.Dataset):
         return self.paths.dataset_root / self.paths.SCENES_PATH_TEMPLATE.format(
             split=self.split
         )
+
+
+class ClevrGlove(ClevrNoImagesDataset):
+    def __init__(
+        self,
+        datadir: str,
+        split: tp.Literal["train", "val"],
+        glove_dim: tp.Literal[50, 100, 200, 300],
+        download: bool = False,
+        nhops: tp.Optional[tp.List[int]] = None,
+        question_type: tp.Literal["program", "question"] = "program",
+    ):
+        self.nhops = nhops or list(NHOPS_TO_CATS.keys())
+        cats = [cat for hop in self.nhops for cat in NHOPS_TO_CATS[hop]]
+
+        def filter_fn(question):
+            return question["question_family_index"] in cats
+
+        super().__init__(
+            datadir,
+            split,
+            download,
+            filter_fn=filter_fn,
+        )
+        assert question_type in ("program", "question")
+        self.question_type = question_type
+        self.vocab = GloveVocab(datadir, glove_dim, self.paths.metadata_path)
+
+    def get_raw(self, key):
+        graph, raw_program, answer = super().get_raw(key)
+        if self.question_type == "program":
+            question = [sub for token in raw_program for sub in token.split("_")]
+        elif self.question_type == "question":
+            question = (
+                re.sub(r"[;?]", " ", self.questions[key]["question"]).lower().split()
+            )
+        return graph, question, answer
 
 
 class ClevrWInstructions(ClevrNoImagesDataset):
@@ -535,6 +680,75 @@ def is_gud_for_nsm(question):
     return question["question_family_index"] in ALL_EASY_CATS
 
 
+class ClevrGloveDataModule(pl.LightningDataModule):
+    def __init__(
+        self,
+        datadir: str,
+        batch_size: int,
+        glove_dim: int,
+        question_type: str,
+        nhops: tp.Optional[tp.List[int]] = None,
+    ):
+        super().__init__()
+        self.save_hyperparameters(ignore=("datadir",))
+        self.datadir = datadir
+        self.batch_size = batch_size
+        self.glove_dim = glove_dim
+        self.nhops = nhops
+        self.question_type = question_type
+
+    def prepare_data(self):
+        ClevrWInstructions.download(self.datadir)
+
+    def setup(self, stage):
+        if stage in ("fit", "validate", None):
+            self.clevr_val = ClevrGlove(
+                self.datadir,
+                split="val",
+                glove_dim=self.glove_dim,
+                nhops=self.nhops,
+                question_type=self.question_type,
+            )
+        if stage in ("fit", None):
+            self.clevr_train = ClevrGlove(
+                self.datadir,
+                split="train",
+                glove_dim=self.glove_dim,
+                nhops=self.nhops,
+                question_type=self.question_type,
+            )
+
+    def _get_dataloader(self, split: tp.Literal["train", "val"]):
+        dataset = getattr(self, f"clevr_{split}")
+        vocab = dataset.vocab
+
+        def collate_fn(batch):
+            graphs, questions, targets = zip(*batch)
+
+            # return a 6-tuple, thats what the last iteration of
+            # NSMLightningModule expects
+            return (
+                collate_graphs(graphs),
+                torch.nn.utils.rnn.pack_sequence(questions, enforce_sorted=False),
+                vocab.concept_embeddings,
+                vocab.property_embeddings,
+                torch.tensor(targets),
+                # dummy tensor, gold_instructions not used
+                torch.empty(1)
+            )
+
+        return data.DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=split == "train",
+            collate_fn=collate_fn,
+            num_workers=os.cpu_count(),
+        )
+
+    train_dataloader = partialmethod(_get_dataloader, "train")
+    val_dataloader = partialmethod(_get_dataloader, "val")
+
+
 class ClevrWInstructionsDataModule(pl.LightningDataModule):
     def __init__(
         self,
@@ -544,7 +758,7 @@ class ClevrWInstructionsDataModule(pl.LightningDataModule):
         nhops: tp.Optional[tp.List[int]] = None,
     ):
         super().__init__()
-        self.save_hyperparameters(ignore=("datadir", ))
+        self.save_hyperparameters(ignore=("datadir",))
         self.datadir = datadir
         self.batch_size = batch_size
         self.nhops = nhops
