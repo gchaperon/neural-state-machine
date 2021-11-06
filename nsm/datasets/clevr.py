@@ -276,15 +276,32 @@ class Vocab:
 
 
 class GloveVocab(Glove, Vocab):
-    def __init__(self, datadir, dim, metadata_path):
+    def __init__(
+        self,
+        datadir,
+        dim,
+        metadata_path,
+        prop_embed_method: tp.Literal["embed", "mean"] = "embed",
+    ):
         super(GloveVocab, self).__init__(datadir, dim)
         # prop_embed_const is unused here
         super(Glove, self).__init__(metadata_path, prop_embed_const=0.0)
+        self.prop_embed_method = prop_embed_method
 
     # first property embedding heuristic
     @cached_property
     def property_embeddings(self):
-        return self.embed(list(self.grouped_attributes.keys()))
+        if self.prop_embed_method == "embed":
+            return self.embed(list(self.grouped_attributes.keys()))
+        elif self.prop_embed_method == "mean":
+            return torch.stack(
+                [
+                    self.embed(self.grouped_attributes[prop]).mean(dim=0)
+                    for prop in self.properties
+                ]
+            )
+        else:
+            raise ValueError(f"Invalid prop_embed_conts={self.prop_embed_const}")
 
     # second heuristic, use average
     # @cached_property
@@ -441,6 +458,7 @@ class ClevrGlove(ClevrNoImagesDataset):
         download: bool = False,
         nhops: tp.Optional[tp.List[int]] = None,
         question_type: tp.Literal["program", "question"] = "program",
+        prop_embed_method: tp.Literal["embed", "mean"] = "embed",
     ):
         self.nhops = nhops or list(NHOPS_TO_CATS.keys())
         cats = [cat for hop in self.nhops for cat in NHOPS_TO_CATS[hop]]
@@ -456,7 +474,12 @@ class ClevrGlove(ClevrNoImagesDataset):
         )
         assert question_type in ("program", "question")
         self.question_type = question_type
-        self.vocab = GloveVocab(datadir, glove_dim, self.paths.metadata_path)
+        self.vocab = GloveVocab(
+            datadir,
+            glove_dim,
+            self.paths.metadata_path,
+            prop_embed_method=prop_embed_method,
+        )
 
     def get_raw(self, key):
         graph, raw_program, answer = super().get_raw(key)
@@ -687,6 +710,7 @@ class ClevrGloveDataModule(pl.LightningDataModule):
         batch_size: int,
         glove_dim: int,
         question_type: str,
+        prop_embed_method: tp.Literal["embed", "mean"],
         nhops: tp.Optional[tp.List[int]] = None,
     ):
         super().__init__()
@@ -696,6 +720,7 @@ class ClevrGloveDataModule(pl.LightningDataModule):
         self.glove_dim = glove_dim
         self.nhops = nhops
         self.question_type = question_type
+        self.prop_embed_method = prop_embed_method
 
     def prepare_data(self):
         ClevrWInstructions.download(self.datadir)
@@ -708,6 +733,7 @@ class ClevrGloveDataModule(pl.LightningDataModule):
                 glove_dim=self.glove_dim,
                 nhops=self.nhops,
                 question_type=self.question_type,
+                prop_embed_method=self.prop_embed_method,
             )
         if stage in ("fit", None):
             self.clevr_train = ClevrGlove(
@@ -716,6 +742,7 @@ class ClevrGloveDataModule(pl.LightningDataModule):
                 glove_dim=self.glove_dim,
                 nhops=self.nhops,
                 question_type=self.question_type,
+                prop_embed_method=self.prop_embed_method,
             )
 
     def _get_dataloader(self, split: tp.Literal["train", "val"]):
@@ -734,7 +761,7 @@ class ClevrGloveDataModule(pl.LightningDataModule):
                 vocab.property_embeddings,
                 torch.tensor(targets),
                 # dummy tensor, gold_instructions not used
-                torch.empty(1)
+                torch.empty(1),
             )
 
         return data.DataLoader(

@@ -32,6 +32,7 @@ def main(args):
         args.glove_dim,
         nhops=args.nhops,
         question_type=args.question_type,
+        prop_embed_method=args.prop_embed_method,
     )
     # most params obtained via inspection of dataset
     model = NSMLightningModule(
@@ -79,6 +80,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--question-type", required=True, choices=("program", "question")
     )
+    parser.add_argument("--prop-embed-method", required=True, choices=("embed", "mean"))
 
     args = parser.parse_args()
     assert args.computation_steps >= max(args.nhops) + 1
