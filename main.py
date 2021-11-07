@@ -80,7 +80,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--question-type", required=True, choices=("program", "question")
     )
-    parser.add_argument("--prop-embed-method", required=True, choices=("embed", "mean"))
+    parser.add_argument(
+        "--prop-embed-method", required=True, choices=("embed", "mean", "sum")
+    )
 
     args = parser.parse_args()
     assert args.computation_steps >= max(args.nhops) + 1

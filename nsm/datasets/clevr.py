@@ -300,6 +300,13 @@ class GloveVocab(Glove, Vocab):
                     for prop in self.properties
                 ]
             )
+        elif self.prop_embed_method == "sum":
+            return torch.stack(
+                [
+                    self.embed(self.grouped_attributes[prop]).sum(dim=0)
+                    for prop in self.properties
+                ]
+            )
         else:
             raise ValueError(f"Invalid prop_embed_conts={self.prop_embed_const}")
 
