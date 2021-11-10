@@ -40,7 +40,6 @@ class Tagger(nn.Module):
         return f"embedding_size={self.weight.shape[0]}"
 
 
-
 class InstructionDecoder(nn.Module):
     def __init__(
         self,

@@ -27,12 +27,13 @@ def main(args):
 
     print(args)
     datamodule = clevr.ClevrGloveDataModule(
-        "data",
-        args.batch_size,
-        args.glove_dim,
-        nhops=args.nhops,
+        datadir="data",
+        batch_size=args.batch_size,
+        glove_dim=args.glove_dim,
         question_type=args.question_type,
         prop_embed_method=args.prop_embed_method,
+        prop_embed_scale=args.prop_embed_scale,
+        nhops=args.nhops,
     )
     # most params obtained via inspection of dataset
     model = NSMLightningModule(
@@ -64,25 +65,25 @@ if __name__ == "__main__":
     parser.add_argument("--encoded-size", type=int, default=100)
     parser.add_argument("--prop-embeds-const", type=float, default=5.0)
     parser.add_argument("--learn-rate", type=float, default=0.001)
-    # parser.add_argument("--use-instruction-loss", action="store_true")
-
     parser.add_argument(
         "--nhops",
         nargs="+",
         type=int,
         choices=clevr.NHOPS_TO_CATS.keys(),
-        default=list(clevr.NHOPS_TO_CATS.keys()),
+        default=[2],
     )
-    parser.add_argument("--computation-steps", type=int, required=True)
+    parser.add_argument("--computation-steps", type=int, default=3)
     parser.add_argument(
-        "--glove-dim", type=int, required=True, choices=(50, 100, 200, 300)
+        "--glove-dim", type=int, default=50, choices=(50, 100, 200, 300)
     )
+
     parser.add_argument(
         "--question-type", required=True, choices=("program", "question")
     )
     parser.add_argument(
         "--prop-embed-method", required=True, choices=("embed", "mean", "sum")
     )
+    parser.add_argument("--prop-embed-scale", required=True, type=float)
 
     args = parser.parse_args()
     assert args.computation_steps >= max(args.nhops) + 1

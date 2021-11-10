@@ -281,27 +281,29 @@ class GloveVocab(Glove, Vocab):
         datadir,
         dim,
         metadata_path,
-        prop_embed_method: tp.Literal["embed", "mean"] = "embed",
+        prop_embed_method: tp.Literal["embed", "mean", "sum"] = "embed",
+        prop_embed_scale: float = 1.0,
     ):
         super(GloveVocab, self).__init__(datadir, dim)
         # prop_embed_const is unused here
         super(Glove, self).__init__(metadata_path, prop_embed_const=0.0)
         self.prop_embed_method = prop_embed_method
+        self.prop_embed_scale = prop_embed_scale
 
     # first property embedding heuristic
     @cached_property
     def property_embeddings(self):
         if self.prop_embed_method == "embed":
-            return self.embed(list(self.grouped_attributes.keys()))
+            out = self.embed(list(self.grouped_attributes.keys()))
         elif self.prop_embed_method == "mean":
-            return torch.stack(
+            out = torch.stack(
                 [
                     self.embed(self.grouped_attributes[prop]).mean(dim=0)
                     for prop in self.properties
                 ]
             )
         elif self.prop_embed_method == "sum":
-            return torch.stack(
+            out = torch.stack(
                 [
                     self.embed(self.grouped_attributes[prop]).sum(dim=0)
                     for prop in self.properties
@@ -309,16 +311,7 @@ class GloveVocab(Glove, Vocab):
             )
         else:
             raise ValueError(f"Invalid prop_embed_conts={self.prop_embed_const}")
-
-    # second heuristic, use average
-    # @cached_property
-    # def property_embeddings(self):
-    #     return torch.stack(
-    #         [
-    #             self.embed(self.grouped_attributes[prop]).mean(dim=0)
-    #             for prop in self.properties
-    #         ]
-    #     )
+        return self.prop_embed_scale * out
 
 
 def scene_to_graph(scene: dict, vocab: Vocab) -> Graph:
@@ -466,6 +459,7 @@ class ClevrGlove(ClevrNoImagesDataset):
         nhops: tp.Optional[tp.List[int]] = None,
         question_type: tp.Literal["program", "question"] = "program",
         prop_embed_method: tp.Literal["embed", "mean"] = "embed",
+        prop_embed_scale: float = 1.0,
     ):
         self.nhops = nhops or list(NHOPS_TO_CATS.keys())
         cats = [cat for hop in self.nhops for cat in NHOPS_TO_CATS[hop]]
@@ -486,6 +480,7 @@ class ClevrGlove(ClevrNoImagesDataset):
             glove_dim,
             self.paths.metadata_path,
             prop_embed_method=prop_embed_method,
+            prop_embed_scale=prop_embed_scale,
         )
 
     def get_raw(self, key):
@@ -716,8 +711,9 @@ class ClevrGloveDataModule(pl.LightningDataModule):
         datadir: str,
         batch_size: int,
         glove_dim: int,
-        question_type: str,
-        prop_embed_method: tp.Literal["embed", "mean"],
+        question_type: tp.Literal["program", "question"],
+        prop_embed_method: tp.Literal["embed", "mean", "sum"],
+        prop_embed_scale: float,
         nhops: tp.Optional[tp.List[int]] = None,
     ):
         super().__init__()
@@ -728,6 +724,7 @@ class ClevrGloveDataModule(pl.LightningDataModule):
         self.nhops = nhops
         self.question_type = question_type
         self.prop_embed_method = prop_embed_method
+        self.prop_embed_scale = prop_embed_scale
 
     def prepare_data(self):
         ClevrWInstructions.download(self.datadir)
@@ -741,6 +738,7 @@ class ClevrGloveDataModule(pl.LightningDataModule):
                 nhops=self.nhops,
                 question_type=self.question_type,
                 prop_embed_method=self.prop_embed_method,
+                prop_embed_scale=self.prop_embed_scale,
             )
         if stage in ("fit", None):
             self.clevr_train = ClevrGlove(
@@ -750,6 +748,7 @@ class ClevrGloveDataModule(pl.LightningDataModule):
                 nhops=self.nhops,
                 question_type=self.question_type,
                 prop_embed_method=self.prop_embed_method,
+                prop_embed_scale=self.prop_embed_scale,
             )
 
     def _get_dataloader(self, split: tp.Literal["train", "val"]):
