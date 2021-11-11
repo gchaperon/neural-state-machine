@@ -76,14 +76,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--glove-dim", type=int, default=50, choices=(50, 100, 200, 300)
     )
+    parser.add_argument(
+        "--prop-embed-method", default="sum", choices=("embed", "mean", "sum")
+    )
+    parser.add_argument("--prop-embed-scale", default=1., type=float)
 
+    # required args
     parser.add_argument(
         "--question-type", required=True, choices=("program", "question")
     )
-    parser.add_argument(
-        "--prop-embed-method", required=True, choices=("embed", "mean", "sum")
-    )
-    parser.add_argument("--prop-embed-scale", required=True, type=float)
 
     args = parser.parse_args()
     assert args.computation_steps >= max(args.nhops) + 1
