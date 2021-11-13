@@ -26,18 +26,15 @@ def main(args):
     logging.basicConfig(level=logging.INFO)
 
     print(args)
-    datamodule = clevr.ClevrGloveDataModule(
+    datamodule = clevr.ClevrWInstructionsDataModule(
         datadir="data",
         batch_size=args.batch_size,
-        glove_dim=args.glove_dim,
-        question_type=args.question_type,
-        prop_embed_method=args.prop_embed_method,
-        prop_embed_scale=args.prop_embed_scale,
+        prop_embeds_const=1.,
         nhops=args.nhops,
     )
     # most params obtained via inspection of dataset
     model = NSMLightningModule(
-        input_size=args.glove_dim,
+        input_size=45,
         n_node_properties=4,
         computation_steps=args.computation_steps,
         encoded_question_size=args.encoded_size,
@@ -61,30 +58,18 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--encoded-size", type=int, default=100)
-    parser.add_argument("--prop-embeds-const", type=float, default=5.0)
-    parser.add_argument("--learn-rate", type=float, default=0.001)
+
+    parser.add_argument("--batch-size", type=int, required=True)
+    parser.add_argument("--learn-rate", type=float, required=True)
     parser.add_argument(
         "--nhops",
         nargs="+",
         type=int,
         choices=clevr.NHOPS_TO_CATS.keys(),
-        default=[2],
+        required=True,
     )
-    parser.add_argument("--computation-steps", type=int, default=3)
-    parser.add_argument(
-        "--glove-dim", type=int, default=50, choices=(50, 100, 200, 300)
-    )
-    parser.add_argument(
-        "--prop-embed-method", default="sum", choices=("embed", "mean", "sum")
-    )
-    parser.add_argument("--prop-embed-scale", default=1., type=float)
-
-    # required args
-    parser.add_argument(
-        "--question-type", required=True, choices=("program", "question")
-    )
+    parser.add_argument("--computation-steps", type=int, required=True)
 
     args = parser.parse_args()
     assert args.computation_steps >= max(args.nhops) + 1

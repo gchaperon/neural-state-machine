@@ -20,6 +20,22 @@ def allow_non_deterministic():
         torch.use_deterministic_algorithms(prev_state)
 
 
+class MyRNN(nn.Module):
+    def __init__(
+        self,
+        input_size,
+        hidden_size,
+        nonlinearity,
+        dropout=0.0,
+    ):
+        super().__init__()
+
+
+class MyLSTM(nn.Module):
+    def __init__(self, input_size, hidden_szie, dropout=0.0):
+        super().__init__()
+
+
 class Tagger(nn.Module):
     def __init__(self, embedding_size) -> None:
         super(Tagger, self).__init__()

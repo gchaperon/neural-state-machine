@@ -310,7 +310,7 @@ class GloveVocab(Glove, Vocab):
                 ]
             )
         else:
-            raise ValueError(f"Invalid prop_embed_conts={self.prop_embed_const}")
+            raise ValueError(f"Invalid prop_embed_method={self.prop_embed_method}")
         return self.prop_embed_scale * out
 
 
