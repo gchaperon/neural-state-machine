@@ -53,6 +53,7 @@ NHOPS_TO_CATS = {
 }
 
 ALL_EASY_CATS = [cat for range_ in NHOPS_TO_CATS.values() for cat in range_]
+ALL_CATS = range(90)
 
 
 class Glove:
@@ -416,7 +417,9 @@ class ClevrNoImagesDataset(data.Dataset):
         return (
             scene_to_graph(scene, self.vocab),
             # filter "scene", which is always the last word/token
-            program_to_polish(question["program"])[:-1],
+            # EDIT: don't filter scene, when the program is more complex, scene
+            # appears more than 1 time and it is tricky to remove everywhere
+            program_to_polish(question["program"]),
             question["answer"],
         )
 
@@ -843,52 +846,46 @@ class ClevrWInstructionsDataModule(pl.LightningDataModule):
     val_dataloader = partialmethod(_get_dataloader, "val")
 
 
-class ClevrNoImagesDataModule(pl.LightningDataModule):
+class ClevrDataModule(pl.LightningDataModule):
     def __init__(
         self,
         data_dir: tp.Union[str, Path],
         batch_size: int,
-        num_workers: int = 4,
-        w_instructions: bool = False,
-        nhops: tp.Optional[tp.List[int]] = None,
+        cats: tp.List[int],
+        prop_embeds_const: float,
     ):
         super().__init__()
         self.data_dir = data_dir
         self.batch_size = batch_size
-        self.num_workers = num_workers
-        self.w_instructions = w_instructions
-        self.nhops = nhops or []
-        assert all(n in range(0, 4) for n in self.nhops), "nhops range is [0..3]"
+        assert all(c in ALL_CATS for c in cats)
+        self.cats = cats
+        self.prop_embeds_const = prop_embeds_const
 
     def prepare_data(self):
         ClevrNoImagesDataset.download(self.data_dir)
 
     def setup(self, stage: tp.Optional[str] = None):
-        dataset_cls = (
-            ClevrNoImagesWInstructionsDataset
-            if self.w_instructions
-            else ClevrNoImagesDataset
-        )
-        filter_cats = (
-            [cat for nhops in self.nhops for cat in NHOPS_TO_CATS[nhops]]
-            if self.nhops
-            else ALL_EASY_CATS
-        )
-
         def filter_fn(question):
-            return question["question_family_index"] in filter_cats
+            return question["question_family_index"] in self.cats
 
         if stage in ("fit", "validate", None):
-            self.clevr_val = dataset_cls(
-                self.data_dir, split="val", filter_fn=filter_fn
+            self.clevr_val = ClevrNoImagesDataset(
+                self.data_dir,
+                split="val",
+                filter_fn=filter_fn,
+                prop_embeds_const=self.prop_embeds_const,
             )
         if stage in ("fit", None):
-            self.clevr_train = dataset_cls(
-                self.data_dir, split="train", filter_fn=filter_fn
+            self.clevr_val = ClevrNoImagesDataset(
+                self.data_dir,
+                split="train",
+                filter_fn=filter_fn,
+                prop_embeds_const=self.prop_embeds_const,
             )
 
-    def _get_dataloader(self, split):
-        vocab = getattr(self, "clevr_train", self.clevr_val).vocab
+    def _get_dataloader(self, split: str):
+        dataset = getattr(self, f"clevr_{split}")
+        vocab = dataset.vocab
 
         def collate(batch):
             graphs, questions, targets = collate_nsmitems(batch)
@@ -898,17 +895,20 @@ class ClevrNoImagesDataModule(pl.LightningDataModule):
                 vocab.concept_embeddings,
                 vocab.property_embeddings,
                 targets,
+                # dummy tensor, gold_instructions not used
+                torch.empty(1),
             )
 
         return data.DataLoader(
-            split,
+            dataset,
             batch_size=self.batch_size,
+            shuffle=split == "train",
             collate_fn=collate,
-            num_workers=self.num_workers,
+            num_workers=os.cpu_count(),
         )
 
     def train_dataloader(self):
-        return self._get_dataloader(self.clevr_train)
+        return self._get_dataloader("train")
 
     def val_dataloader(self):
-        return self._get_dataloader(self.clevr_val)
+        return self._get_dataloader("val")
