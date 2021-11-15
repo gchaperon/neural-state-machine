@@ -26,11 +26,11 @@ def main(args):
     logging.basicConfig(level=logging.INFO)
 
     print(args)
-    datamodule = clevr.ClevrWInstructionsDataModule(
+    datamodule = clevr.ClevrDataModule(
         datadir="data",
         batch_size=args.batch_size,
+        cats=args.cats,
         prop_embeds_const=1.,
-        nhops=args.nhops,
     )
     # most params obtained via inspection of dataset
     model = NSMLightningModule(
@@ -45,10 +45,10 @@ def main(args):
     metric_to_track = "train_loss"
     trainer = pl.Trainer(
         gpus=-1 if torch.cuda.is_available() else 0,
-        max_epochs=1000,
+        max_epochs=200,
         callbacks=[
             pl.callbacks.EarlyStopping(
-                monitor=metric_to_track, patience=50, stopping_threshold=1e-3
+                monitor=metric_to_track, patience=30, stopping_threshold=1e-3
             ),
             pl.callbacks.ModelCheckpoint(monitor=metric_to_track),
         ],
@@ -63,14 +63,13 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, required=True)
     parser.add_argument("--learn-rate", type=float, required=True)
     parser.add_argument(
-        "--nhops",
+        "--cats",
         nargs="+",
         type=int,
-        choices=clevr.NHOPS_TO_CATS.keys(),
+        choices=clevr.ALL_CATS,
         required=True,
     )
     parser.add_argument("--computation-steps", type=int, required=True)
 
     args = parser.parse_args()
-    assert args.computation_steps >= max(args.nhops) + 1
     main(args)

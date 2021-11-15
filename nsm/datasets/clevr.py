@@ -849,20 +849,21 @@ class ClevrWInstructionsDataModule(pl.LightningDataModule):
 class ClevrDataModule(pl.LightningDataModule):
     def __init__(
         self,
-        data_dir: tp.Union[str, Path],
+        datadir: tp.Union[str, Path],
         batch_size: int,
         cats: tp.List[int],
         prop_embeds_const: float,
     ):
         super().__init__()
-        self.data_dir = data_dir
+        self.save_hyperparameters(ignore=("datadir",))
+        self.datadir = datadir
         self.batch_size = batch_size
         assert all(c in ALL_CATS for c in cats)
         self.cats = cats
         self.prop_embeds_const = prop_embeds_const
 
     def prepare_data(self):
-        ClevrNoImagesDataset.download(self.data_dir)
+        ClevrNoImagesDataset.download(self.datadir)
 
     def setup(self, stage: tp.Optional[str] = None):
         def filter_fn(question):
@@ -870,14 +871,14 @@ class ClevrDataModule(pl.LightningDataModule):
 
         if stage in ("fit", "validate", None):
             self.clevr_val = ClevrNoImagesDataset(
-                self.data_dir,
+                self.datadir,
                 split="val",
                 filter_fn=filter_fn,
                 prop_embeds_const=self.prop_embeds_const,
             )
         if stage in ("fit", None):
-            self.clevr_val = ClevrNoImagesDataset(
-                self.data_dir,
+            self.clevr_train = ClevrNoImagesDataset(
+                self.datadir,
                 split="train",
                 filter_fn=filter_fn,
                 prop_embeds_const=self.prop_embeds_const,
