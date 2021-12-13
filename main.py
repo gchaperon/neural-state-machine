@@ -2,6 +2,7 @@ import os
 from nsm.model import NSM, NSMLightningModule, instruction_model_types
 import nsm.datasets.synthetic as syn
 import nsm.datasets.clevr as clevr
+import nsm.datasets.custom_clevr as cclevr
 import pytorch_lightning as pl
 from tqdm import tqdm
 import torch
@@ -13,24 +14,16 @@ import logging
 import random
 
 
-LRS = [5e-5, 1e-4, 5e-4, 1e-3]
-BSIZES = [16, 32, 64, 128]
-ENCODED_SIZES = [45, 100, 200, 500]
-INSTRUCTION_LOSS_SCALINGS = [10, 50, 100]
-Args = collections.namedtuple(
-    "Args", "learn_rate, batch_size, encoded_size, instruction_loss_scaling"
-)
-
-
 def main(args):
     logging.basicConfig(level=logging.INFO)
 
     print(args)
-    datamodule = clevr.ClevrDataModule(
-        datadir="data",
+    datamodule = cclevr.CustomClevrDataModule(
+        questions_template="data/custom-clevr/count-only/count_only_{}_questions.json",
+        scenes_template="data/clevr/CLEVR_v1.0/scenes/CLEVR_{}_scenes.json",
+        metadata_path="data/clevr/metadata.json",
+        postprocess_fn_name="balance_counts",
         batch_size=args.batch_size,
-        cats=args.cats,
-        prop_embeds_const=1.,
     )
     # most params obtained via inspection of dataset
     model = NSMLightningModule(
@@ -62,13 +55,6 @@ if __name__ == "__main__":
 
     parser.add_argument("--batch-size", type=int, required=True)
     parser.add_argument("--learn-rate", type=float, required=True)
-    parser.add_argument(
-        "--cats",
-        nargs="+",
-        type=int,
-        choices=clevr.ALL_CATS,
-        required=True,
-    )
     parser.add_argument("--computation-steps", type=int, required=True)
 
     args = parser.parse_args()
