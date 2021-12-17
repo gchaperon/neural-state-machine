@@ -606,3 +606,8 @@ class InstructionsModelLightningModule(pl.LightningModule):
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.learn_rate)
+
+
+class NSMBaseline(nn.Module):
+    def __init__(self):
+        super(NSMBaseline, self).__init__()

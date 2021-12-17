@@ -49,17 +49,20 @@ class Scene(tp.TypedDict):
 
 
 def balance_counts(
-    questions: tp.List[Question], scenes: tp.Dict[int, Scene]
+    questions: tp.List[Question],
+    scenes: tp.Dict[int, Scene],
+    allowed_counts: tp.List[int],
 ) -> tp.Tuple[tp.List[Question], tp.Dict[int, Scene]]:
-    MAX_COUNT = 4
     questions = (
-        q for q in questions if type(q["answer"]) == int and q["answer"] <= MAX_COUNT
+        q
+        for q in questions
+        if type(q["answer"]) == int and q["answer"] in allowed_counts
     )
-    grouped = [[] for _ in range(MAX_COUNT + 1)]
+    grouped = [[] for _ in range(len(allowed_counts))]
 
     for q in questions:
         answer = q["answer"]
-        grouped[answer].append(q)
+        grouped[allowed_counts.index(answer)].append(q)
 
     max_sample = min(len(g) for g in grouped)
     balanced_questions = list(
@@ -163,6 +166,75 @@ class CustomClevrDataModule(pl.LightningDataModule):
                 self.scenes_template.format("train"),
                 self.metadata_path,
                 balance_counts,
+            )
+
+    def _get_dataloader(self, split):
+        dataset = getattr(self, f"{split}_split")
+        vocab = dataset.vocab
+
+        def collate_fn(batch):
+            graphs, questions, targets = utils.collate_nsmitems(batch)
+            return (
+                graphs,
+                questions,
+                vocab.concept_embeddings,
+                vocab.property_embeddings,
+                targets,
+                torch.empty(1),
+            )
+
+        return torch.utils.data.DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=split == "train",
+            collate_fn=collate_fn,
+            num_workers=os.cpu_count(),
+        )
+
+    train_dataloader = functools.partialmethod(_get_dataloader, "train")
+    val_dataloader = functools.partialmethod(_get_dataloader, "val")
+
+
+class GeneralizeCountsClevrDataModule(pl.LightningDataModule):
+    def __init__(self, datadir: str, batch_size: int) -> None:
+        super().__init__()
+        self.save_hyperparameters("batch_size")
+        self.datadir = datadir
+        self.batch_size = batch_size
+
+    def setup(self, stage):
+        questions_path = (
+            pathlib.Path(self.datadir)
+            / "custom-clevr"
+            / "count-only"
+            / "count_only_train_questions.json"
+        )
+        scenes_path = (
+            pathlib.Path(self.datadir)
+            / "clevr"
+            / "CLEVR_v1.0"
+            / "scenes"
+            / "CLEVR_train_scenes.json"
+        )
+        metadata_path = pathlib.Path(self.datadir) / "clevr" / "metadata.json"
+
+        if stage in ("fit", "validate", None):
+            self.val_split = CustomClevr(
+                questions_path,
+                scenes_path,
+                metadata_path,
+                postprocess_fn=functools.partial(
+                    balance_counts, allowed_counts=list(range(5, 11))
+                ),
+            )
+        if stage in ("fit", None):
+            self.train_split = CustomClevr(
+                questions_path,
+                scenes_path,
+                metadata_path,
+                postprocess_fn=functools.partial(
+                    balance_counts, allowed_counts=list(range(0, 5))
+                ),
             )
 
     def _get_dataloader(self, split):

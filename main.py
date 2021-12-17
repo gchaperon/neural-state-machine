@@ -18,11 +18,8 @@ def main(args):
     logging.basicConfig(level=logging.INFO)
 
     print(args)
-    datamodule = cclevr.CustomClevrDataModule(
-        questions_template="data/custom-clevr/count-only/count_only_{}_questions.json",
-        scenes_template="data/clevr/CLEVR_v1.0/scenes/CLEVR_{}_scenes.json",
-        metadata_path="data/clevr/metadata.json",
-        postprocess_fn_name="balance_counts",
+    datamodule = cclevr.GeneralizeCountsClevrDataModule(
+        datadir="data",
         batch_size=args.batch_size,
     )
     # most params obtained via inspection of dataset
@@ -38,10 +35,10 @@ def main(args):
     metric_to_track = "train_loss"
     trainer = pl.Trainer(
         gpus=-1 if torch.cuda.is_available() else 0,
-        max_epochs=200,
+        max_epochs=800,
         callbacks=[
             pl.callbacks.EarlyStopping(
-                monitor=metric_to_track, patience=30, stopping_threshold=1e-3
+                monitor=metric_to_track, patience=50, stopping_threshold=1e-3
             ),
             pl.callbacks.ModelCheckpoint(monitor=metric_to_track),
         ],
