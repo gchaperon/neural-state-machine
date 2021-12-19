@@ -195,6 +195,64 @@ class CustomClevrDataModule(pl.LightningDataModule):
     val_dataloader = functools.partialmethod(_get_dataloader, "val")
 
 
+class BalancedCountsClevrDataModule(pl.LightningDataModule):
+    def __init__(self, datadir: str, batch_size: int) -> None:
+        super().__init__()
+        self.save_hyperparameters("batch_size")
+        self.datadir = datadir
+        self.batch_size = batch_size
+
+    def setup(self, stage):
+        questions_base = pathlib.Path(self.datadir) / "custom-clevr" / "count-only"
+        scenes_base = pathlib.Path(self.datadir) / "clevr" / "CLEVR_v1.0" / "scenes"
+        metadata_path = pathlib.Path(self.datadir) / "clevr" / "metadata.json"
+
+        if stage in ("fit", "validate", None):
+            self.val_split = CustomClevr(
+                questions_base / "count_only_val_questions.json",
+                scenes_base / "CLEVR_val_scenes.json",
+                metadata_path,
+                postprocess_fn=functools.partial(
+                    balance_counts, allowed_counts=list(range(0, 6))
+                ),
+            )
+        if stage in ("fit", None):
+            self.train_split = CustomClevr(
+                questions_base / "count_only_train_questions.json",
+                scenes_base / "CLEVR_train_scenes.json",
+                metadata_path,
+                postprocess_fn=functools.partial(
+                    balance_counts, allowed_counts=list(range(0, 6))
+                ),
+            )
+
+    def _get_dataloader(self, split):
+        dataset = getattr(self, f"{split}_split")
+        vocab = dataset.vocab
+
+        def collate_fn(batch):
+            graphs, questions, targets = utils.collate_nsmitems(batch)
+            return (
+                graphs,
+                questions,
+                vocab.concept_embeddings,
+                vocab.property_embeddings,
+                targets,
+                torch.empty(1),
+            )
+
+        return torch.utils.data.DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=split == "train",
+            collate_fn=collate_fn,
+            num_workers=os.cpu_count(),
+        )
+
+    train_dataloader = functools.partialmethod(_get_dataloader, "train")
+    val_dataloader = functools.partialmethod(_get_dataloader, "val")
+
+
 class GeneralizeCountsClevrDataModule(pl.LightningDataModule):
     def __init__(self, datadir: str, batch_size: int) -> None:
         super().__init__()

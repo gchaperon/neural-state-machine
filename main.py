@@ -1,5 +1,10 @@
 import os
-from nsm.model import NSM, NSMLightningModule, instruction_model_types
+from nsm.model import (
+    NSM,
+    NSMLightningModule,
+    instruction_model_types,
+    NSMBaselineLightningModule,
+)
 import nsm.datasets.synthetic as syn
 import nsm.datasets.clevr as clevr
 import nsm.datasets.custom_clevr as cclevr
@@ -18,19 +23,19 @@ def main(args):
     logging.basicConfig(level=logging.INFO)
 
     print(args)
-    datamodule = cclevr.GeneralizeCountsClevrDataModule(
+    datamodule = cclevr.BalancedCountsClevrDataModule(
         datadir="data",
         batch_size=args.batch_size,
     )
     # most params obtained via inspection of dataset
-    model = NSMLightningModule(
+    model = NSMBaselineLightningModule(
         input_size=45,
         n_node_properties=4,
-        computation_steps=args.computation_steps,
+        # computation_steps=args.computation_steps,
         encoded_question_size=args.encoded_size,
         output_size=28,
         learn_rate=args.learn_rate,
-        use_instruction_loss=False,
+        # use_instruction_loss=False,
     )
     metric_to_track = "train_loss"
     trainer = pl.Trainer(
@@ -52,7 +57,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--batch-size", type=int, required=True)
     parser.add_argument("--learn-rate", type=float, required=True)
-    parser.add_argument("--computation-steps", type=int, required=True)
+    # parser.add_argument("--computation-steps", type=int, required=True)
 
     args = parser.parse_args()
     main(args)

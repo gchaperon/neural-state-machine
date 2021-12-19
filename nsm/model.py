@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 from torch.nn.utils.rnn import PackedSequence, pad_packed_sequence
-from torch_scatter import scatter_sum
+from torch_scatter import scatter_sum, scatter_mean
 from nsm.utils import Batch, scatter_softmax
 import contextlib
 
@@ -474,6 +474,83 @@ class NSM(nn.Module):
         return predictions, instructions
 
 
+class NSMBaselineLightningModule(pl.LightningModule):
+    def __init__(
+        self,
+        input_size: int,
+        n_node_properties: int,
+        encoded_question_size: int,
+        output_size: int,
+        dropout: float = 0.0,
+        # training args
+        learn_rate: float = 1e-4,
+    ) -> None:
+        super(NSMBaselineLightningModule, self).__init__()
+        self.save_hyperparameters()
+        self.tagger = Tagger(input_size)
+        self.encoder = nn.LSTM(
+            input_size=input_size, hidden_size=encoded_question_size, dropout=dropout
+        )
+
+        self.classifier = AnswerClassifier(
+            input_size + encoded_question_size, output_size, dropout=dropout
+        )
+        self.learn_rate = learn_rate
+
+    def forward(
+        self,
+        graph_batch: Batch,
+        question_batch: PackedSequence,
+        concept_vocabulary: Tensor,
+        # Last property embedding must be the relation
+        property_embeddings: Tensor,
+    ) -> Tensor:
+        tagged = self.tagger(concept_vocabulary, question_batch)
+        _, (encoded, _) = self.encoder(tagged)  # get last hidden
+        encoded = encoded.squeeze(dim=0)
+
+        # just sum all nodes, nothing fancy
+        aggregated = scatter_mean(
+            torch.sum(graph_batch.node_attrs, dim=1),
+            graph_batch.node_indices,
+            dim=0,
+            dim_size=encoded.size(0),
+        )
+        logits = self.classifier(torch.hstack((encoded, aggregated)))
+        return logits
+
+    def training_step(self, batch, batch_idx):
+        *inputs, targets, gold_instructions = batch
+        logits = self(*inputs)
+
+        loss = self._get_loss(logits, targets)
+        running_acc = torch.sum(logits.argmax(dim=1) == targets) / logits.size(0)
+        self.log("train_loss", loss)
+        self.log("running_train_acc", running_acc)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        *inputs, targets, gold_instructions = batch
+        logits = self(*inputs)
+        return logits, targets
+
+    def validation_epoch_end(self, validation_step_outputs):
+        logits, targets = zip(*validation_step_outputs)
+        logits = torch.cat(logits)
+        targets = torch.cat(targets)
+        loss = self._get_loss(logits, targets)
+        acc = torch.sum(logits.argmax(dim=1) == targets) / logits.size(0)
+        self.log("val_loss", loss)
+        self.log("val_acc", acc)
+        return logits, targets
+
+    def _get_loss(self, logits, targets):
+        return F.cross_entropy(logits, targets)
+
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters(), lr=self.learn_rate)
+
+
 instruction_model_types = {
     "normal": InstructionsModel,
     "dummy": DummyInstructionsModel,
@@ -566,6 +643,13 @@ class NSMLightningModule(pl.LightningModule):
         return torch.optim.Adam(self.parameters(), lr=self.learn_rate)
 
 
+class NSMBaselinLightningModule(pl.LightningModule):
+    def __init__(
+        self,
+    ):
+        super().__init__()
+
+
 class InstructionsModelLightningModule(pl.LightningModule):
     def __init__(
         self,
@@ -606,8 +690,3 @@ class InstructionsModelLightningModule(pl.LightningModule):
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.learn_rate)
-
-
-class NSMBaseline(nn.Module):
-    def __init__(self):
-        super(NSMBaseline, self).__init__()
