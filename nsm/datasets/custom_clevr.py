@@ -17,7 +17,7 @@ PathLike = tp.Union[str, bytes, os.PathLike]
 
 class Question(tp.TypedDict):
     class Node(tp.TypedDict):
-        type: str
+        function: str
         inputs: tp.List[int]
         value_inputs: tp.List[str]
 
@@ -72,14 +72,27 @@ def balance_counts(
     filtered_scenes = {
         key: s for key, s in scenes.items() if key in filtered_scenes_indices
     }
+
+    # convert answers to string instead of int
+    for q in balanced_questions:
+        q["answer"] = str(q["answer"])
     return balanced_questions, filtered_scenes
 
 
-PostProcessFn = tp.Optional[
-    tp.Callable[
-        [tp.List[Question], tp.Dict[int, Scene]],
-        tp.Tuple[tp.List[Question], tp.Dict[int, Scene]],
-    ]
+def process_exist_qs(
+    questions: tp.List[Question], scenes: tp.Dict[int, Scene]
+) -> tp.Tuple[tp.List[Question], tp.Dict[int, Scene]]:
+    translate = {True: "yes", False: "no"}
+
+    for q in questions:
+        q["answer"] = translate[q["answer"]]
+
+    return questions, scenes
+
+
+PostProcessFn = tp.Callable[
+    [tp.List[Question], tp.Dict[int, Scene]],
+    tp.Tuple[tp.List[Question], tp.Dict[int, Scene]],
 ]
 
 
@@ -93,7 +106,7 @@ class CustomClevrBase(torch.utils.data.Dataset):
         questions_path: PathLike,
         scenes_path: PathLike,
         metadata_path: PathLike,
-        postprocess_fn: PostProcessFn = None,
+        postprocess_fn: tp.Optional[PostProcessFn] = None,
     ):
         self.vocab = og_clevr.Vocab(metadata_path, prop_embed_const=1.0)
         self.questions_path = questions_path
@@ -118,8 +131,7 @@ class CustomClevrBase(torch.utils.data.Dataset):
         return (
             og_clevr.scene_to_graph(scene, self.vocab),
             og_clevr.program_to_polish(question["program"]),
-            # esto es medio hacky, quiza el str() deberia estar en otro lado, postprocess_fn?
-            str(question["answer"]),
+            question["answer"],
         )
 
     def __len__(self):
@@ -133,39 +145,31 @@ class CustomClevr(CustomClevrBase):
         return vocab.embed(graph), vocab.embed(polish), vocab.answers.index(answer)
 
 
-class CustomClevrDataModule(pl.LightningDataModule):
-    def __init__(
-        self,
-        questions_template: str,
-        scenes_template: str,
-        metadata_path: PathLike,
-        postprocess_fn_name: str,
-        batch_size: int,
-    ):
+class ExistClevrDataModule(pl.LightningDataModule):
+    def __init__(self, datadir: str, batch_size: int) -> None:
         super().__init__()
-        self.save_hyperparameters(
-            "questions_template", "postprocess_fn_name", "batch_size"
-        )
-        self.questions_template = questions_template
-        self.scenes_template = scenes_template
-        self.metadata_path = metadata_path
-        self.postprocess_fn = globals()[postprocess_fn_name]
+        self.save_hyperparameters("batch_size")
+        self.datadir = datadir
         self.batch_size = batch_size
 
     def setup(self, stage):
+        questions_base = pathlib.Path(self.datadir) / "custom-clevr" / "exist-only"
+        scenes_base = pathlib.Path(self.datadir) / "clevr" / "CLEVR_v1.0" / "scenes"
+        metadata_path = pathlib.Path(self.datadir) / "clevr" / "metadata.json"
+
         if stage in ("fit", "validate", None):
             self.val_split = CustomClevr(
-                self.questions_template.format("val"),
-                self.scenes_template.format("val"),
-                self.metadata_path,
-                balance_counts,
+                questions_base / "exist_only_val_questions.json",
+                scenes_base / "CLEVR_val_scenes.json",
+                metadata_path,
+                postprocess_fn=process_exist_qs,
             )
         if stage in ("fit", None):
             self.train_split = CustomClevr(
-                self.questions_template.format("train"),
-                self.scenes_template.format("train"),
-                self.metadata_path,
-                balance_counts,
+                questions_base / "exist_only_train_questions.json",
+                scenes_base / "CLEVR_train_scenes.json",
+                metadata_path,
+                postprocess_fn=process_exist_qs,
             )
 
     def _get_dataloader(self, split):
@@ -188,7 +192,7 @@ class CustomClevrDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=split == "train",
             collate_fn=collate_fn,
-            num_workers=os.cpu_count(),
+            num_workers=os.cpu_count() if split == "train" else 0,
         )
 
     train_dataloader = functools.partialmethod(_get_dataloader, "train")
