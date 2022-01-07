@@ -28,10 +28,10 @@ def main(args):
         batch_size=args.batch_size,
     )
     # most params obtained via inspection of dataset
-    model = NSMLightningModule(
+    model = NSMBaselineLightningModule(
         input_size=45,
         n_node_properties=4,
-        computation_steps=args.computation_steps,
+        # computation_steps=args.computation_steps,
         encoded_question_size=args.encoded_size,
         output_size=28,
         learn_rate=args.learn_rate,
@@ -57,7 +57,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--batch-size", type=int, required=True)
     parser.add_argument("--learn-rate", type=float, required=True)
-    parser.add_argument("--computation-steps", type=int, required=True)
+    # parser.add_argument("--computation-steps", type=int, required=True)
 
     args = parser.parse_args()
     main(args)
