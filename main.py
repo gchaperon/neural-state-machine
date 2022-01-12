@@ -27,49 +27,45 @@ def main(args):
         datadir="data",
         batch_size=args.batch_size,
         subset_ratio=args.subset_ratio,
+        cats=args.single_and_cats,
     )
     # most params obtained via inspection of dataset
-    nsm_model = NSMLightningModule(
-        input_size=45,
-        n_node_properties=4,
-        computation_steps=args.computation_steps,
-        encoded_question_size=args.encoded_size,
-        output_size=28,
-        learn_rate=args.learn_rate,
-        # use_instruction_loss=False,
-    )
-    baseline_model = NSMBaselineLightningModule(
-        input_size=45,
-        n_node_properties=4,
-        encoded_question_size=args.encoded_size,
-        output_size=28,
-        learn_rate=args.learn_rate,
-        # use_instruction_loss=False,
-    )
-    metric_to_track = "train_loss"
-    trainer_1 = pl.Trainer(
-        gpus=-1 if torch.cuda.is_available() else 0,
-        max_epochs=800,
-        callbacks=[
-            pl.callbacks.EarlyStopping(
-                monitor=metric_to_track, patience=50, stopping_threshold=1e-3
-            ),
-            pl.callbacks.ModelCheckpoint(monitor=metric_to_track),
-        ],
-    )
-    trainer_1.fit(nsm_model, datamodule)
 
-    trainer_2 = pl.Trainer(
+    if args.model_type == "NSM":
+        model = NSMLightningModule(
+            input_size=45,
+            n_node_properties=4,
+            computation_steps=args.computation_steps,
+            encoded_question_size=args.encoded_size,
+            output_size=28,
+            learn_rate=args.learn_rate,
+            # use_instruction_loss=False,
+        )
+    elif args.model_type == "NSMBaseline":
+        print(f"NSMBaseline chosen, ignoring {args.computation_steps=}")
+        model = NSMBaselineLightningModule(
+            input_size=45,
+            n_node_properties=4,
+            encoded_question_size=args.encoded_size,
+            output_size=28,
+            learn_rate=args.learn_rate,
+            # use_instruction_loss=False,
+        )
+    metric_to_track = "val_acc"
+    trainer = pl.Trainer(
         gpus=-1 if torch.cuda.is_available() else 0,
-        max_epochs=800,
+        max_epochs=500,
         callbacks=[
             pl.callbacks.EarlyStopping(
-                monitor=metric_to_track, patience=50, stopping_threshold=1e-3
+                monitor=metric_to_track,
+                patience=20,
+                stopping_threshold=0.95,
+                mode="max",
             ),
             pl.callbacks.ModelCheckpoint(monitor=metric_to_track),
         ],
     )
-    trainer_2.fit(baseline_model, datamodule)
+    trainer.fit(model, datamodule)
 
 
 if __name__ == "__main__":
@@ -80,6 +76,14 @@ if __name__ == "__main__":
     parser.add_argument("--learn-rate", type=float, required=True)
     parser.add_argument("--subset-ratio", type=float, required=True)
     parser.add_argument("--computation-steps", type=int, required=True)
+    parser.add_argument("--model-type", required=True, choices=("NSM", "NSMBaseline"))
+    parser.add_argument(
+        "--single-and-cats",
+        nargs="+",
+        metavar="CAT",
+        choices=cclevr.AND_CATS,
+        default=cclevr.AND_CATS,
+    )
 
     args = parser.parse_args()
     main(args)

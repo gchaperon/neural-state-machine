@@ -89,13 +89,24 @@ def process_exist_qs(
 
     return questions, scenes
 
-def process_and_qs(
-    questions: tp.List[Question], scenes: tp.Dict[int, Scene]
-) -> tp.Tuple[tp.List[Question], tp.Dict[int, Scene]]:
-    for q in questions:
-        q["answer"] = str(q["answer"])
 
-    return questions, scenes
+AND_CATS = ["count", "query_size", "query_color", "query_material", "query_shape"]
+
+
+def process_and_qs(
+    questions: tp.List[Question],
+    scenes: tp.Dict[int, Scene],
+    cats: tp.List[str],
+) -> tp.Tuple[tp.List[Question], tp.Dict[int, Scene]]:
+    assert all(cat in AND_CATS for cat in cats), "you are mixing cats dude"
+    cat_indices = [i for i, cat in enumerate(AND_CATS) if cat in cats]
+    processed = []
+    for q in questions:
+        if q["question_family_index"] in cat_indices:
+            q["answer"] = str(q["answer"])
+            processed.append(q)
+
+    return processed, scenes
 
 
 PostProcessFn = tp.Callable[
@@ -155,18 +166,20 @@ class CustomClevr(CustomClevrBase):
 
 class SingleAndClevrDataModule(pl.LightningDataModule):
     def __init__(
-        self, datadir: str, batch_size: int, subset_ratio: float = 0.5
+        self, datadir: str, batch_size: int, cats, subset_ratio: float = 0.5
     ) -> None:
         super().__init__()
-        self.save_hyperparameters("batch_size", "subset_ratio")
+        self.save_hyperparameters(ignore=("datadir", ))
         self.datadir = datadir
         self.batch_size = batch_size
+        self.cats=cats
         self.subset_ratio = subset_ratio
 
     def setup(self, stage=None):
         questions_base = pathlib.Path(self.datadir) / "custom-clevr" / "single-and"
         scenes_base = pathlib.Path(self.datadir) / "clevr" / "CLEVR_v1.0" / "scenes"
         metadata_path = pathlib.Path(self.datadir) / "clevr" / "metadata.json"
+        postprocess_fn = functools.partial(process_and_qs, cats=self.cats)
 
         if stage in ("fit", "validate", None):
             print("Loading val dataset")
@@ -174,7 +187,7 @@ class SingleAndClevrDataModule(pl.LightningDataModule):
                 questions_base / "single_and_val_questions.json",
                 scenes_base / "CLEVR_val_scenes.json",
                 metadata_path,
-                postprocess_fn=process_and_qs,
+                postprocess_fn=postprocess_fn,
             )
 
             val_indices = range(int(self.subset_ratio * len(dataset)))
@@ -185,7 +198,7 @@ class SingleAndClevrDataModule(pl.LightningDataModule):
                 questions_base / "single_and_train_questions.json",
                 scenes_base / "CLEVR_train_scenes.json",
                 metadata_path,
-                postprocess_fn=process_and_qs,
+                postprocess_fn=postprocess_fn,
             )
             train_indices = range(int(self.subset_ratio * len(dataset)))
             self.train_split = torch.utils.data.Subset(dataset, train_indices)
