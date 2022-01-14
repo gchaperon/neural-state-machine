@@ -23,11 +23,10 @@ def main(args):
     logging.basicConfig(level=logging.INFO)
 
     print(args)
-    datamodule = cclevr.SingleAndClevrDataModule(
+    datamodule = cclevr.SameRelateClevrDataModule(
         datadir="data",
         batch_size=args.batch_size,
         subset_ratio=args.subset_ratio,
-        cats=args.single_and_cats,
     )
     # most params obtained via inspection of dataset
 
@@ -77,13 +76,6 @@ if __name__ == "__main__":
     parser.add_argument("--subset-ratio", type=float, required=True)
     parser.add_argument("--computation-steps", type=int, required=True)
     parser.add_argument("--model-type", required=True, choices=("NSM", "NSMBaseline"))
-    parser.add_argument(
-        "--single-and-cats",
-        nargs="+",
-        metavar="CAT",
-        choices=cclevr.AND_CATS,
-        default=cclevr.AND_CATS,
-    )
 
     args = parser.parse_args()
     main(args)

@@ -164,15 +164,73 @@ class CustomClevr(CustomClevrBase):
         return vocab.embed(graph), vocab.embed(polish), vocab.answers.index(answer)
 
 
+class SameRelateClevrDataModule(pl.LightningDataModule):
+    def __init__(self, datadir: str, batch_size: int, subset_ratio: float = 1.0):
+        super().__init__()
+        self.save_hyperparameters(ignore=("datadir",))
+        self.datadir = datadir
+        self.batch_size = batch_size
+        self.subset_ratio = subset_ratio
+
+    def setup(self, stage=None):
+        questions_base = pathlib.Path(self.datadir) / "custom-clevr" / "same-relate"
+        scenes_base = pathlib.Path(self.datadir) / "clevr" / "CLEVR_v1.0" / "scenes"
+        metadata_path = pathlib.Path(self.datadir) / "clevr" / "metadata.json"
+
+        if stage in ("fit", "validate", None):
+            dataset = CustomClevr(
+                questions_base / "same_relate_query_val_questions.json",
+                scenes_base / "CLEVR_val_scenes.json",
+                metadata_path,
+            )
+            val_indices = range(int(self.subset_ratio * len(dataset)))
+            self.val_split = torch.utils.data.Subset(dataset, val_indices)
+        if stage in ("fit", None):
+            dataset = CustomClevr(
+                questions_base / "same_relate_query_train_questions.json",
+                scenes_base / "CLEVR_train_scenes.json",
+                metadata_path,
+            )
+            train_indices = range(int(self.subset_ratio * len(dataset)))
+            self.train_split = torch.utils.data.Subset(dataset, train_indices)
+
+    def _get_dataloader(self, split):
+        dataset = getattr(self, f"{split}_split")
+        # dataset is now a torch.utils.data.Subset
+        vocab = dataset.dataset.vocab
+
+        def collate_fn(batch):
+            graphs, questions, targets = utils.collate_nsmitems(batch)
+            return (
+                graphs,
+                questions,
+                vocab.concept_embeddings,
+                vocab.property_embeddings,
+                targets,
+                torch.empty(1),
+            )
+
+        return torch.utils.data.DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=split == "train",
+            collate_fn=collate_fn,
+            num_workers=os.cpu_count() if split == "train" else 0,
+        )
+
+    train_dataloader = functools.partialmethod(_get_dataloader, "train")
+    val_dataloader = functools.partialmethod(_get_dataloader, "val")
+
+
 class SingleAndClevrDataModule(pl.LightningDataModule):
     def __init__(
         self, datadir: str, batch_size: int, cats, subset_ratio: float = 0.5
     ) -> None:
         super().__init__()
-        self.save_hyperparameters(ignore=("datadir", ))
+        self.save_hyperparameters(ignore=("datadir",))
         self.datadir = datadir
         self.batch_size = batch_size
-        self.cats=cats
+        self.cats = cats
         self.subset_ratio = subset_ratio
 
     def setup(self, stage=None):
