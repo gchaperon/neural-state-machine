@@ -23,13 +23,13 @@ def main(args):
     logging.basicConfig(level=logging.INFO)
 
     print(args)
-    datamodule = cclevr.SameRelateClevrDataModule(
+    datamodule = cclevr.ComparisonClevrDataModule(
         datadir="data",
         batch_size=args.batch_size,
         subset_ratio=args.subset_ratio,
     )
+    
     # most params obtained via inspection of dataset
-
     if args.model_type == "NSM":
         model = NSMLightningModule(
             input_size=45,
