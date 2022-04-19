@@ -437,7 +437,7 @@ class ClevrNoImagesDataset(data.Dataset):
             logger.info(f"Extracting {paths.zip_path} to {paths.dataset_root}")
             with zipfile.ZipFile(paths.zip_path) as myzip:
                 myzip.extractall(path=paths.dataset_root)
-            logger.info(f"Done!")
+            logger.info("Done!")
 
     @property
     def questions_path(self):
@@ -853,7 +853,7 @@ class ClevrDataModule(pl.LightningDataModule):
         batch_size: int,
         cats: tp.List[int],
         prop_embeds_const: float,
-    ):
+    ) -> None:
         super().__init__()
         self.save_hyperparameters(ignore=("datadir",))
         self.datadir = datadir
@@ -905,7 +905,7 @@ class ClevrDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=split == "train",
             collate_fn=collate,
-            num_workers=os.cpu_count(),
+            num_workers=os.cpu_count() or 0,
         )
 
     def train_dataloader(self):
