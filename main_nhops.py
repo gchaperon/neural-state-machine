@@ -10,17 +10,6 @@ import logging
 
 def main(args):
     logging.basicConfig(level=logging.INFO)
-    datamodule = clevr.ClevrDataModule(
-        datadir="data",
-        batch_size=args.batch_size,
-        cats=[
-            cat
-            for nhops, group in clevr.NHOPS_TO_CATS.items()
-            for cat in group
-            if nhops != 3
-        ],
-        prop_embeds_const=1,
-    )
     model = NSMLightningModule(
         input_size=45,
         n_node_properties=4,
@@ -42,7 +31,23 @@ def main(args):
             pl.callbacks.ModelCheckpoint(monitor=metric_to_track),
         ],
     )
-    trainer.fit(model, datamodule)
+    if args.train_cats:
+        datamodule = clevr.ClevrDataModule(
+            datadir="data",
+            batch_size=args.batch_size,
+            cats=args.train_cats,
+            prop_embeds_const=1,
+        )
+        trainer.fit(model, datamodule=datamodule, ckpt_path=args.checkpoint)
+
+    for cat in args.test_cats:
+        datamodule = clevr.ClevrDataModule(
+            datadir="data",
+            batch_size=args.batch_size,
+            cats=[cat],
+            prop_embeds_const=1,
+        )
+        trainer.validate(model, datamodule=datamodule, ckpt_path=args.checkpoint)
 
 
 if __name__ == "__main__":
@@ -51,6 +56,9 @@ if __name__ == "__main__":
 
     parser.add_argument("--batch-size", type=int, required=True)
     parser.add_argument("--learn-rate", type=float, required=True)
+    parser.add_argument("--train-cats", nargs="+", type=int)
+    parser.add_argument("--test-cats", nargs="+", type=int, default=())
+    parser.add_argument("--checkpoint")
 
     args = parser.parse_args()
     main(args)
