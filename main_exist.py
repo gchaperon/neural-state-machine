@@ -1,12 +1,10 @@
-"""script to train model for nhop plots in theses"""
-import nsm.datasets.clevr as clevr
+import nsm.datasets.custom_clevr as cclevr
 from nsm.model import NSMLightningModule
 import pytorch_lightning as pl
 import torch
 
 import argparse
 import logging
-
 
 def main(args):
     logging.basicConfig(level=logging.INFO)
@@ -31,23 +29,19 @@ def main(args):
             pl.callbacks.ModelCheckpoint(monitor=metric_to_track),
         ],
     )
-    if args.train_cats:
-        datamodule = clevr.ClevrDataModule(
+    if args.train:
+        datamodule = cclevr.ExistClevrDataModule(
             datadir="data",
             batch_size=args.batch_size,
-            cats=args.train_cats,
-            prop_embeds_const=1,
         )
         trainer.fit(model, datamodule=datamodule, ckpt_path=args.checkpoint)
 
-    for cat in args.test_cats:
-        datamodule = clevr.ClevrDataModule(
+    if args.validate:
+        datamodule = cclevr.ExistClevrDataModule(
             datadir="data",
             batch_size=args.batch_size,
-            cats=[cat],
-            prop_embeds_const=1,
         )
-        trainer.validate(model, datamodule=datamodule, ckpt_path=args.checkpoint)
+        trainer.fit(model, datamodule=datamodule, ckpt_path=args.checkpoint)
 
 
 if __name__ == "__main__":
@@ -56,8 +50,9 @@ if __name__ == "__main__":
 
     parser.add_argument("--batch-size", type=int, required=True)
     parser.add_argument("--learn-rate", type=float, required=True)
-    parser.add_argument("--train-cats", nargs="+", type=int)
-    parser.add_argument("--test-cats", nargs="+", type=int, default=())
+    parser.add_argument("--computation-steps", type=int, default=4)
+    parser.add_argument("--no-train", dest="train", action="store_false")
+    parser.add_argument("--no-validate", dest="validate", action="store_false")
     parser.add_argument("--checkpoint")
 
     args = parser.parse_args()
