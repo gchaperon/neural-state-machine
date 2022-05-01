@@ -6,6 +6,7 @@ import torch
 import argparse
 import logging
 
+
 def main(args):
     logging.basicConfig(level=logging.INFO)
     model = NSMLightningModule(
@@ -19,25 +20,25 @@ def main(args):
     metric_to_track = "train_loss"
     trainer = pl.Trainer(
         gpus=-1 if torch.cuda.is_available() else 0,
-        max_epochs=1000,
+        max_epochs=500,
         callbacks=[
             pl.callbacks.EarlyStopping(
                 monitor=metric_to_track,
-                patience=150,
+                patience=75,
                 mode="min",
             ),
             pl.callbacks.ModelCheckpoint(monitor=metric_to_track),
         ],
     )
     if args.train:
-        datamodule = cclevr.ExistClevrDataModule(
+        datamodule = cclevr.BalancedCountsClevrDataModule(
             datadir="data",
             batch_size=args.batch_size,
         )
         trainer.fit(model, datamodule=datamodule, ckpt_path=args.checkpoint)
 
     if args.validate:
-        datamodule = cclevr.ExistClevrDataModule(
+        datamodule = cclevr.BalancedCountsClevrDataModule(
             datadir="data",
             batch_size=args.batch_size,
         )
