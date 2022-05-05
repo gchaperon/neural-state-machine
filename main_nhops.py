@@ -36,7 +36,6 @@ def main(args):
             datadir="data",
             batch_size=args.batch_size,
             cats=args.train_cats,
-            prop_embeds_const=1,
         )
         trainer.fit(model, datamodule=datamodule, ckpt_path=args.checkpoint)
 
@@ -45,7 +44,6 @@ def main(args):
             datadir="data",
             batch_size=args.batch_size,
             cats=[cat],
-            prop_embeds_const=1,
         )
         trainer.validate(model, datamodule=datamodule, ckpt_path=args.checkpoint)
 
@@ -53,6 +51,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--encoded-size", type=int, default=100)
+    parser.add_argument("--computation-steps", type=int, default=4)
 
     parser.add_argument("--batch-size", type=int, required=True)
     parser.add_argument("--learn-rate", type=float, required=True)

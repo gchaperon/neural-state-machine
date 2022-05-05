@@ -161,9 +161,8 @@ class Vocab:
     metadata: dict
     prop_embed_const: float
 
-    def __init__(self, metadata_path: tp.Union[str, Path], prop_embed_const: float):
+    def __init__(self, metadata_path: tp.Union[str, Path]):
         self.metadata_path = Path(metadata_path)
-        self.prop_embed_const = prop_embed_const
         if not self.metadata_path.exists():
             data_utils.download(
                 self.METADATA_URL,
@@ -232,18 +231,12 @@ class Vocab:
 
     @cached_property
     def property_embeddings(self):
-        out = torch.zeros(len(self.properties), self.embed_size)
-        lens = [len(self.grouped_attributes[prop]) for prop in self.properties]
-        start = 0
-        for i, len_ in enumerate(lens):
-            # pay attention to the magnitude of the values here, 1e6 might mess
-            # things up, and 1 might not be enough so that softmax to avoid
-            # softmax leaving dirty results because the difference between 0 and
-            # 1 is too small
-            # 5 seems to be a reasonable value
-            out[i, start : start + len_] = self.prop_embed_const
-            start += len_
-        return out
+        return torch.stack(
+            [
+                torch.sum(self.embed(self.grouped_attributes[prop]), dim=0)
+                for prop in self.properties
+            ]
+        )
 
     @property
     def embed_size(self):
@@ -379,11 +372,10 @@ class ClevrNoImagesDataset(data.Dataset):
         split: tp.Literal["train", "val"],
         download: bool = False,
         filter_fn: tp.Optional[tp.Callable] = None,
-        prop_embeds_const: float = 5.0,
     ):
         self.paths = self.Paths(datadir)
         self.split = split
-        self.vocab = Vocab(self.paths.metadata_path, prop_embeds_const)
+        self.vocab = Vocab(self.paths.metadata_path)
 
         if download:
             self.download(datadir)
@@ -852,7 +844,6 @@ class ClevrDataModule(pl.LightningDataModule):
         datadir: tp.Union[str, Path],
         batch_size: int,
         cats: tp.List[int],
-        prop_embeds_const: float,
     ) -> None:
         super().__init__()
         self.save_hyperparameters(ignore=("datadir",))
@@ -860,7 +851,6 @@ class ClevrDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         assert all(c in ALL_CATS for c in cats)
         self.cats = cats
-        self.prop_embeds_const = prop_embeds_const
 
     def prepare_data(self):
         ClevrNoImagesDataset.download(self.datadir)
@@ -874,14 +864,12 @@ class ClevrDataModule(pl.LightningDataModule):
                 self.datadir,
                 split="val",
                 filter_fn=filter_fn,
-                prop_embeds_const=self.prop_embeds_const,
             )
         if stage in ("fit", None):
             self.clevr_train = ClevrNoImagesDataset(
                 self.datadir,
                 split="train",
                 filter_fn=filter_fn,
-                prop_embeds_const=self.prop_embeds_const,
             )
 
     def _get_dataloader(self, split: str):
@@ -896,8 +884,6 @@ class ClevrDataModule(pl.LightningDataModule):
                 vocab.concept_embeddings,
                 vocab.property_embeddings,
                 targets,
-                # dummy tensor, gold_instructions not used
-                torch.empty(1),
             )
 
         return data.DataLoader(
