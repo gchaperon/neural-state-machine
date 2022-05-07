@@ -143,7 +143,7 @@ class CustomClevrBase(torch.utils.data.Dataset):
         metadata_path: PathLike,
         postprocess_fn: tp.Optional[PostProcessFn] = None,
     ):
-        self.vocab = og_clevr.Vocab(metadata_path, prop_embed_const=1.0)
+        self.vocab = og_clevr.Vocab(metadata_path)
         self.questions_path = questions_path
         self.scenes_path = scenes_path
         with open(questions_path) as q_file:
@@ -366,58 +366,123 @@ class SingleAndClevrDataModule(pl.LightningDataModule):
     val_dataloader = functools.partialmethod(_get_dataloader, "val")
 
 
+class Subset(torch.utils.data.Subset):
+    def __getattr__(self, name):
+        return getattr(self.dataset, name)
+
+
 class ExistClevrDataModule(pl.LightningDataModule):
-    def __init__(self, datadir: str, batch_size: int) -> None:
+    def __init__(
+        self, datadir: str, batch_size: int, train_nexamples: int = 10**5
+    ) -> None:
         super().__init__()
-        self.save_hyperparameters("batch_size")
+        self.save_hyperparameters("batch_size", "train_nexamples")
         self.datadir = datadir
         self.batch_size = batch_size
+        self.train_nexamples = train_nexamples
 
     def setup(self, stage):
         questions_base = pathlib.Path(self.datadir) / "custom-clevr" / "exist-only"
         scenes_base = pathlib.Path(self.datadir) / "clevr" / "CLEVR_v1.0" / "scenes"
         metadata_path = pathlib.Path(self.datadir) / "clevr" / "metadata.json"
 
-        if stage in ("fit", "validate", None):
+        if stage in ("fit", "validate", "test", None):
             self.val_split = CustomClevr(
-                questions_base / "exist_only_val_questions.json",
+                questions_base / "exist_val_questions.json",
                 scenes_base / "CLEVR_val_scenes.json",
                 metadata_path,
                 postprocess_fn=process_exist_qs,
             )
         if stage in ("fit", None):
-            self.train_split = CustomClevr(
-                questions_base / "exist_only_train_questions.json",
+            dataset = CustomClevr(
+                questions_base / "exist_train_questions.json",
                 scenes_base / "CLEVR_train_scenes.json",
                 metadata_path,
                 postprocess_fn=process_exist_qs,
             )
+            self.train_split = Subset(
+                dataset,
+                torch.multinomial(
+                    torch.ones(len(dataset)), num_samples=self.train_nexamples
+                ),
+            )
 
-    def _get_dataloader(self, split):
-        dataset = getattr(self, f"{split}_split")
-        vocab = dataset.vocab
+    def train_dataloader(self):
+        def collate_fn(batch):
+            graphs, questions, targets = utils.collate_nsmitems(batch)
+            return (
+                graphs,
+                questions,
+                self.train_split.vocab.concept_embeddings,
+                self.train_split.vocab.property_embeddings,
+                targets,
+            )
+
+        return torch.utils.data.DataLoader(
+            self.train_split,
+            batch_size=self.batch_size,
+            shuffle=True,
+            collate_fn=collate_fn,
+            num_workers=os.cpu_count(),
+        )
+
+    def val_dataloader(self):
+        def collate_fn(batch):
+            graphs, questions, targets = utils.collate_nsmitems(batch)
+            return (
+                graphs,
+                questions,
+                self.val_split.vocab.concept_embeddings,
+                self.val_split.vocab.property_embeddings,
+                targets,
+            )
+
+        return torch.utils.data.DataLoader(
+            Subset(
+                self.val_split,
+                torch.multinomial(
+                    torch.ones(len(self.val_split)),
+                    num_samples=int(0.1 * self.train_nexamples),
+                ),
+            ),
+            batch_size=self.batch_size,
+            shuffle=False,
+            collate_fn=collate_fn,
+            num_workers=os.cpu_count(),
+        )
+
+    def test_dataloader(self):
+        # NOTE: on "question_family_index"
+        # 0 is for 0 nhops
+        # 1 is for 1 nhops
+        # 2 is for 2 nhops
+        # 3 is for 3 nhops
+        # This sounds super dumb but it is not guaranteed :-/
+
+        subset_indices = [[] for _ in range(4)]
+        for i, q in enumerate(self.val_split.questions):
+            subset_indices[q["question_family_index"]].append(i)
 
         def collate_fn(batch):
             graphs, questions, targets = utils.collate_nsmitems(batch)
             return (
                 graphs,
                 questions,
-                vocab.concept_embeddings,
-                vocab.property_embeddings,
+                self.val_split.vocab.concept_embeddings,
+                self.val_split.vocab.property_embeddings,
                 targets,
-                torch.empty(1),
             )
 
-        return torch.utils.data.DataLoader(
-            dataset,
-            batch_size=self.batch_size,
-            shuffle=split == "train",
-            collate_fn=collate_fn,
-            num_workers=os.cpu_count() if split == "train" else 0,
-        )
-
-    train_dataloader = functools.partialmethod(_get_dataloader, "train")
-    val_dataloader = functools.partialmethod(_get_dataloader, "val")
+        return [
+            torch.utils.data.DataLoader(
+                Subset(self.val_split, indices),
+                batch_size=self.batch_size,
+                shuffle=False,
+                collate_fn=collate_fn,
+                num_workers=os.cpu_count(),
+            )
+            for indices in subset_indices
+        ]
 
 
 class BalancedCountsClevrDataModule(pl.LightningDataModule):
@@ -434,7 +499,7 @@ class BalancedCountsClevrDataModule(pl.LightningDataModule):
 
         if stage in ("fit", "validate", None):
             self.val_split = CustomClevr(
-                questions_base / "count_only_val_questions.json",
+                questions_base / "count_val_questions.json",
                 scenes_base / "CLEVR_val_scenes.json",
                 metadata_path,
                 postprocess_fn=functools.partial(
@@ -443,7 +508,7 @@ class BalancedCountsClevrDataModule(pl.LightningDataModule):
             )
         if stage in ("fit", None):
             self.train_split = CustomClevr(
-                questions_base / "count_only_train_questions.json",
+                questions_base / "count_train_questions.json",
                 scenes_base / "CLEVR_train_scenes.json",
                 metadata_path,
                 postprocess_fn=functools.partial(

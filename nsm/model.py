@@ -410,7 +410,7 @@ class NSMBaselineLightningModule(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        *inputs, targets, gold_instructions = batch
+        *inputs, targets = batch
         logits = self(*inputs)
         return logits, targets
 
@@ -483,6 +483,11 @@ class NSMLightningModule(pl.LightningModule):
         self.log("val_loss", loss)
         self.log("val_acc", acc)
         return predictions, targets
+
+    def test_step(self, batch, batch_idx, dloader_idx=None):
+        return self.validation_step(batch, batch_idx)
+
+    test_epoch_end = validation_epoch_end
 
     def _get_loss(self, predictions, targets):
         return F.cross_entropy(predictions, targets)

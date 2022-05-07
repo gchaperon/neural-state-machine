@@ -26,3 +26,5 @@ lightning_logs
 
 # dir used to store remote logs, like the ones from relela or rafike
 remote_logs
+relela_01_logs
+relela_02_logs

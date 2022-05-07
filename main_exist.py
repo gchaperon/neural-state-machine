@@ -23,7 +23,7 @@ def main(args):
         callbacks=[
             pl.callbacks.EarlyStopping(
                 monitor=metric_to_track,
-                patience=150,
+                patience=200,
                 mode="min",
             ),
             pl.callbacks.ModelCheckpoint(monitor=metric_to_track),
@@ -36,12 +36,14 @@ def main(args):
         )
         trainer.fit(model, datamodule=datamodule, ckpt_path=args.checkpoint)
 
-    if args.validate:
+    if args.test:
         datamodule = cclevr.ExistClevrDataModule(
             datadir="data",
             batch_size=args.batch_size,
         )
-        trainer.validate(model, datamodule=datamodule, ckpt_path=args.checkpoint)
+        datamodule.setup("test")
+        for dloader in datamodule.test_dataloader():
+            trainer.test(model, dloader, ckpt_path=args.checkpoint)
 
 
 if __name__ == "__main__":
@@ -52,7 +54,7 @@ if __name__ == "__main__":
     parser.add_argument("--learn-rate", type=float, required=True)
     parser.add_argument("--computation-steps", type=int, default=4)
     parser.add_argument("--no-train", dest="train", action="store_false")
-    parser.add_argument("--no-validate", dest="validate", action="store_false")
+    parser.add_argument("--no-test", dest="test", action="store_false")
     parser.add_argument("--checkpoint")
 
     args = parser.parse_args()
