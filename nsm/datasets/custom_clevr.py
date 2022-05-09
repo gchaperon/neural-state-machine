@@ -4,6 +4,7 @@ import pathlib
 import os
 import itertools
 import functools
+import collections
 import random
 
 import torch
@@ -497,7 +498,7 @@ class BalancedCountsClevrDataModule(pl.LightningDataModule):
         scenes_base = pathlib.Path(self.datadir) / "clevr" / "CLEVR_v1.0" / "scenes"
         metadata_path = pathlib.Path(self.datadir) / "clevr" / "metadata.json"
 
-        if stage in ("fit", "validate", None):
+        if stage in ("fit", "validate", "test", None):
             self.val_split = CustomClevr(
                 questions_base / "count_val_questions.json",
                 scenes_base / "CLEVR_val_scenes.json",
@@ -516,8 +517,8 @@ class BalancedCountsClevrDataModule(pl.LightningDataModule):
                 ),
             )
 
-    def _get_dataloader(self, split):
-        dataset = getattr(self, f"{split}_split")
+    def train_dataloader(self):
+        dataset = self.train_split
         vocab = dataset.vocab
 
         def collate_fn(batch):
@@ -528,19 +529,80 @@ class BalancedCountsClevrDataModule(pl.LightningDataModule):
                 vocab.concept_embeddings,
                 vocab.property_embeddings,
                 targets,
-                torch.empty(1),
             )
 
         return torch.utils.data.DataLoader(
             dataset,
             batch_size=self.batch_size,
-            shuffle=split == "train",
+            shuffle=True,
             collate_fn=collate_fn,
             num_workers=os.cpu_count(),
         )
 
-    train_dataloader = functools.partialmethod(_get_dataloader, "train")
-    val_dataloader = functools.partialmethod(_get_dataloader, "val")
+    def val_dataloader(self):
+        dataset = self.val_split
+        vocab = dataset.vocab
+
+        def collate_fn(batch):
+            graphs, questions, targets = utils.collate_nsmitems(batch)
+            return (
+                graphs,
+                questions,
+                vocab.concept_embeddings,
+                vocab.property_embeddings,
+                targets,
+            )
+
+        return torch.utils.data.DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            collate_fn=collate_fn,
+            num_workers=os.cpu_count(),
+        )
+
+    def test_dataloader(self):
+        # NOTE: mapping from "question_family_index" to nhops
+        # 0: 0
+        # 1: 1
+        # 2: 2
+        # 3: 3
+        # This sounds dumb but it wasn't guaranteed
+
+        dataset = self.val_split
+        vocab = dataset.vocab
+
+        counts = map(str, range(6))
+        nhops = range(4)
+
+        grouped_indices = collections.defaultdict(list)
+        for i, question in enumerate(dataset.questions):
+            grouped_indices[
+                (question["answer"], question["question_family_index"])
+            ].append(i)
+
+        def collate_fn(batch):
+            graphs, questions, targets = utils.collate_nsmitems(batch)
+            return (
+                graphs,
+                questions,
+                vocab.concept_embeddings,
+                vocab.property_embeddings,
+                targets,
+            )
+
+        dataloaders = []
+        for key in itertools.product(counts, nhops):
+            dataloaders.append(
+                torch.utils.data.DataLoader(
+                    Subset(dataset, indices=grouped_indices[key]),
+                    batch_size=self.batch_size,
+                    shuffle=False,
+                    collate_fn=collate_fn,
+                    num_workers=os.cpu_count(),
+                )
+            )
+        return dataloaders
 
 
 class GeneralizeCountsClevrDataModule(pl.LightningDataModule):

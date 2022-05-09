@@ -41,9 +41,7 @@ def main(args):
             datadir="data",
             batch_size=args.batch_size,
         )
-        datamodule.setup("test")
-        for dloader in datamodule.test_dataloader():
-            trainer.test(model, dloader, ckpt_path=args.checkpoint)
+        trainer.test(model, datamodule, ckpt_path=args.checkpoint)
 
 
 if __name__ == "__main__":

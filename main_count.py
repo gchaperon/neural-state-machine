@@ -37,12 +37,12 @@ def main(args):
         )
         trainer.fit(model, datamodule=datamodule, ckpt_path=args.checkpoint)
 
-    if args.validate:
+    if args.test:
         datamodule = cclevr.BalancedCountsClevrDataModule(
             datadir="data",
             batch_size=args.batch_size,
         )
-        trainer.validate(model, datamodule=datamodule, ckpt_path=args.checkpoint)
+        trainer.test(model, datamodule=datamodule, ckpt_path=args.checkpoint)
 
 
 if __name__ == "__main__":
@@ -53,7 +53,7 @@ if __name__ == "__main__":
     parser.add_argument("--learn-rate", type=float, required=True)
     parser.add_argument("--computation-steps", type=int, default=4)
     parser.add_argument("--no-train", dest="train", action="store_false")
-    parser.add_argument("--no-validate", dest="validate", action="store_false")
+    parser.add_argument("--no-test", dest="test", action="store_false")
     parser.add_argument("--checkpoint")
 
     args = parser.parse_args()

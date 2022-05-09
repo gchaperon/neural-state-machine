@@ -484,10 +484,12 @@ class NSMLightningModule(pl.LightningModule):
         self.log("val_acc", acc)
         return predictions, targets
 
-    def test_step(self, batch, batch_idx, dloader_idx=None):
-        return self.validation_step(batch, batch_idx)
-
-    test_epoch_end = validation_epoch_end
+    def test_step(self, batch, batch_idx, dloader_idx=0):
+        graphs, questions, concepts, properties, targets = batch
+        predictions = self(graphs, questions, concepts, properties)
+        batch_size = predictions.size(0)
+        acc = torch.sum(predictions.argmax(dim=1) == targets) / batch_size
+        self.log("test_acc", acc, batch_size=batch_size, add_dataloader_idx=dloader_idx)
 
     def _get_loss(self, predictions, targets):
         return F.cross_entropy(predictions, targets)
