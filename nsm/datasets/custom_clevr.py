@@ -5,7 +5,6 @@ import os
 import itertools
 import functools
 import collections
-import random
 
 import torch
 import pytorch_lightning as pl
@@ -50,6 +49,11 @@ class Scene(tp.TypedDict):
     relationships: Relationships
 
 
+class Subset(torch.utils.data.Subset):
+    def __getattr__(self, name):
+        return getattr(self.dataset, name)
+
+
 def balance_counts(
     questions: tp.List[Question],
     scenes: tp.Dict[int, Scene],
@@ -92,34 +96,12 @@ def process_exist_qs(
     return questions, scenes
 
 
-AND_CATS = ["count", "query_size", "query_color", "query_material", "query_shape"]
-
-
-def process_and_qs(
-    questions: tp.List[Question],
-    scenes: tp.Dict[int, Scene],
-    cats: tp.List[str],
-) -> tp.Tuple[tp.List[Question], tp.Dict[int, Scene]]:
-    assert all(cat in AND_CATS for cat in cats), "you are mixing cats dude"
-    cat_indices = [i for i, cat in enumerate(AND_CATS) if cat in cats]
-    processed = []
-    for q in questions:
-        if q["question_family_index"] in cat_indices:
-            q["answer"] = str(q["answer"])
-            processed.append(q)
-
-    return processed, scenes
-
-
 def process_comparison_qs(
     questions: tp.List[Question],
     scenes: tp.Dict[int, Scene],
 ) -> tp.Tuple[tp.List[Question], tp.Dict[int, Scene]]:
 
-    _answer_map = {
-        True: "yes",
-        False: "no",
-    }
+    _answer_map = {True: "yes", False: "no"}
 
     for q in questions:
         q["answer"] = _answer_map[q["answer"]]
@@ -182,12 +164,11 @@ class CustomClevr(CustomClevrBase):
 
 
 class ComparisonClevrDataModule(pl.LightningDataModule):
-    def __init__(self, datadir: str, batch_size: int, subset_ratio: float = 1.0):
+    def __init__(self, datadir: str, batch_size: int):
         super().__init__()
         self.save_hyperparameters(ignore=("datadir",))
         self.datadir = datadir
         self.batch_size = batch_size
-        self.subset_ratio = subset_ratio
 
     def setup(self, stage=None):
         datadir = pathlib.Path(self.datadir)
@@ -195,29 +176,29 @@ class ComparisonClevrDataModule(pl.LightningDataModule):
         scenes_base = datadir / "clevr" / "CLEVR_v1.0" / "scenes"
         metadata_path = datadir / "clevr" / "metadata.json"
 
-        if stage in ("fit", "validate", None):
+        if stage in ("fit", "validate", "test", None):
+            print("Loading comparison val split")
             dataset = CustomClevr(
                 questions_base / "comparison_val_questions.json",
                 scenes_base / "CLEVR_val_scenes.json",
                 metadata_path,
                 postprocess_fn=process_comparison_qs,
             )
-            val_indices = range(int(self.subset_ratio * len(dataset)))
-            self.val_split = torch.utils.data.Subset(dataset, val_indices)
+            self.val_split = dataset
+
         if stage in ("fit", None):
+            print("Loading comparison train split")
             dataset = CustomClevr(
                 questions_base / "comparison_train_questions.json",
                 scenes_base / "CLEVR_train_scenes.json",
                 metadata_path,
                 postprocess_fn=process_comparison_qs,
             )
-            train_indices = range(int(self.subset_ratio * len(dataset)))
-            self.train_split = torch.utils.data.Subset(dataset, train_indices)
+            self.train_split = dataset
 
     def _get_dataloader(self, split):
         dataset = getattr(self, f"{split}_split")
-        # dataset is now a torch.utils.data.Subset
-        vocab = dataset.dataset.vocab
+        vocab = dataset.vocab
 
         def collate_fn(batch):
             graphs, questions, targets = utils.collate_nsmitems(batch)
@@ -227,7 +208,6 @@ class ComparisonClevrDataModule(pl.LightningDataModule):
                 vocab.concept_embeddings,
                 vocab.property_embeddings,
                 targets,
-                torch.empty(1),
             )
 
         return torch.utils.data.DataLoader(
@@ -235,47 +215,106 @@ class ComparisonClevrDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=split == "train",
             collate_fn=collate_fn,
-            num_workers=os.cpu_count() if split == "train" else 0,
+            num_workers=os.cpu_count(),
         )
 
     train_dataloader = functools.partialmethod(_get_dataloader, "train")
     val_dataloader = functools.partialmethod(_get_dataloader, "val")
 
+    def test_dataloader(self):
+        # mapping of question_family_index to (nhops, equal_*)
+        # here nhops means the number of hops used in the question
+        # these questions have 2 "branches", and the final operation requires
+        # checking some property at the end of each branch.
+        # Some questions require a hop within one of the branches, a hop in each branch
+        # or the branches simply don't have hops
+        # so 0 would be no hops, 1 means a hop in one of the two branches and 2 means
+        # both branches have hops
+
+        cat_to_key = {
+            0: (0, "equal_size"),
+            1: (0, "equal_color"),
+            2: (0, "equal_material"),
+            3: (0, "equal_shape"),
+            4: (1, "equal_size"),
+            5: (1, "equal_size"),
+            6: (2, "equal_size"),
+            7: (1, "equal_color"),
+            8: (1, "equal_color"),
+            9: (2, "equal_color"),
+            10: (1, "equal_material"),
+            11: (1, "equal_material"),
+            12: (2, "equal_material"),
+            13: (1, "equal_shape"),
+            14: (1, "equal_shape"),
+            15: (2, "equal_shape"),
+        }
+        # note that are only 12 unique tuples in the left side
+        key_to_indices = {key: [] for key in cat_to_key.values()}
+
+        dataset = self.val_split
+
+        for i, question in enumerate(dataset.questions):
+            key_to_indices[cat_to_key[question["question_family_index"]]].append(i)
+
+        vocab = dataset.vocab
+
+        def collate_fn(batch):
+            graphs, questions, targets = utils.collate_nsmitems(batch)
+            return (
+                graphs,
+                questions,
+                vocab.concept_embeddings,
+                vocab.property_embeddings,
+                targets,
+            )
+
+        return [
+            torch.utils.data.DataLoader(
+                Subset(dataset, indices),
+                batch_size=self.batch_size,
+                shuffle=False,
+                collate_fn=collate_fn,
+                num_workers=os.cpu_count(),
+            )
+            for indices in key_to_indices.values()
+        ]
+
 
 class SameRelateClevrDataModule(pl.LightningDataModule):
-    def __init__(self, datadir: str, batch_size: int, subset_ratio: float = 1.0):
+    def __init__(self, datadir: str, batch_size: int):
         super().__init__()
         self.save_hyperparameters(ignore=("datadir",))
         self.datadir = datadir
         self.batch_size = batch_size
-        self.subset_ratio = subset_ratio
 
     def setup(self, stage=None):
         questions_base = pathlib.Path(self.datadir) / "custom-clevr" / "same-relate"
         scenes_base = pathlib.Path(self.datadir) / "clevr" / "CLEVR_v1.0" / "scenes"
         metadata_path = pathlib.Path(self.datadir) / "clevr" / "metadata.json"
 
-        if stage in ("fit", "validate", None):
+        if stage in ("fit", "validate", "test", None):
+            print("Loading same relate val dset")
             dataset = CustomClevr(
-                questions_base / "same_relate_query_val_questions.json",
+                questions_base / "same_relate_val_questions.json",
                 scenes_base / "CLEVR_val_scenes.json",
                 metadata_path,
             )
-            val_indices = range(int(self.subset_ratio * len(dataset)))
-            self.val_split = torch.utils.data.Subset(dataset, val_indices)
+            self.val_split = dataset
+
         if stage in ("fit", None):
+            print("Loading same relate train dset")
             dataset = CustomClevr(
-                questions_base / "same_relate_query_train_questions.json",
+                questions_base / "same_relate_train_questions.json",
                 scenes_base / "CLEVR_train_scenes.json",
                 metadata_path,
             )
-            train_indices = range(int(self.subset_ratio * len(dataset)))
-            self.train_split = torch.utils.data.Subset(dataset, train_indices)
+            self.train_split = dataset
 
     def _get_dataloader(self, split):
         dataset = getattr(self, f"{split}_split")
         # dataset is now a torch.utils.data.Subset
-        vocab = dataset.dataset.vocab
+        vocab = dataset.vocab
 
         def collate_fn(batch):
             graphs, questions, targets = utils.collate_nsmitems(batch)
@@ -285,7 +324,6 @@ class SameRelateClevrDataModule(pl.LightningDataModule):
                 vocab.concept_embeddings,
                 vocab.property_embeddings,
                 targets,
-                torch.empty(1),
             )
 
         return torch.utils.data.DataLoader(
@@ -293,56 +331,89 @@ class SameRelateClevrDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=split == "train",
             collate_fn=collate_fn,
-            num_workers=os.cpu_count() if split == "train" else 0,
+            num_workers=os.cpu_count(),
         )
 
     train_dataloader = functools.partialmethod(_get_dataloader, "train")
     val_dataloader = functools.partialmethod(_get_dataloader, "val")
 
+    def test_dataloader(self):
+        # mapping between question_family_index and (relate_*, query_*)
+        # 0: (same_size, query_color)
+        # 1: (same_size, query_material)
+        # 2: (same_size, query_shape)
+        # 3: (same_color, query_color)
+        # 4: (same_color, query_material)
+        # 5: (same_color, query_shape)
+        # 6: (same_material, query_size)
+        # 7: (same_material, query_color)
+        # 8: (same_material, query_shape)
+        # 9: (same_shape, query_size)
+        # 10: (same_shape, query_color)
+        # 11: (same_shape, query_material)
+
+        dataset = self.val_split
+        vocab = dataset.vocab
+
+        index_groups = [[] for _ in range(12)]
+        for i, q in enumerate(dataset.questions):
+            index_groups[q["question_family_index"]].append(i)
+
+        def collate_fn(batch):
+            graphs, questions, targets = utils.collate_nsmitems(batch)
+            return (
+                graphs,
+                questions,
+                vocab.concept_embeddings,
+                vocab.property_embeddings,
+                targets,
+            )
+
+        return [
+            torch.utils.data.DataLoader(
+                Subset(dataset, indices),
+                batch_size=self.batch_size,
+                shuffle=False,
+                collate_fn=collate_fn,
+                num_workers=os.cpu_count(),
+            )
+            for indices in index_groups
+        ]
+
 
 class SingleAndClevrDataModule(pl.LightningDataModule):
-    def __init__(
-        self, datadir: str, batch_size: int, cats, subset_ratio: float = 0.5
-    ) -> None:
+    def __init__(self, datadir: str, batch_size: int) -> None:
         super().__init__()
         self.save_hyperparameters(ignore=("datadir",))
         self.datadir = datadir
         self.batch_size = batch_size
-        self.cats = cats
-        self.subset_ratio = subset_ratio
 
     def setup(self, stage=None):
         questions_base = pathlib.Path(self.datadir) / "custom-clevr" / "single-and"
         scenes_base = pathlib.Path(self.datadir) / "clevr" / "CLEVR_v1.0" / "scenes"
         metadata_path = pathlib.Path(self.datadir) / "clevr" / "metadata.json"
-        postprocess_fn = functools.partial(process_and_qs, cats=self.cats)
 
-        if stage in ("fit", "validate", None):
+        if stage in ("fit", "validate", "test", None):
             print("Loading val dataset")
             dataset = CustomClevr(
                 questions_base / "single_and_val_questions.json",
                 scenes_base / "CLEVR_val_scenes.json",
                 metadata_path,
-                postprocess_fn=postprocess_fn,
             )
 
-            val_indices = range(int(self.subset_ratio * len(dataset)))
-            self.val_split = torch.utils.data.Subset(dataset, val_indices)
+            self.val_split = dataset
         if stage in ("fit", None):
             print("Loading train dataset")
             dataset = CustomClevr(
                 questions_base / "single_and_train_questions.json",
                 scenes_base / "CLEVR_train_scenes.json",
                 metadata_path,
-                postprocess_fn=postprocess_fn,
             )
-            train_indices = range(int(self.subset_ratio * len(dataset)))
-            self.train_split = torch.utils.data.Subset(dataset, train_indices)
+            self.train_split = dataset
 
     def _get_dataloader(self, split):
         dataset = getattr(self, f"{split}_split")
-        # dataset is now a torch.utils.data.Subset
-        vocab = dataset.dataset.vocab
+        vocab = dataset.vocab
 
         def collate_fn(batch):
             graphs, questions, targets = utils.collate_nsmitems(batch)
@@ -352,7 +423,6 @@ class SingleAndClevrDataModule(pl.LightningDataModule):
                 vocab.concept_embeddings,
                 vocab.property_embeddings,
                 targets,
-                torch.empty(1),
             )
 
         return torch.utils.data.DataLoader(
@@ -360,16 +430,45 @@ class SingleAndClevrDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=split == "train",
             collate_fn=collate_fn,
-            num_workers=os.cpu_count() if split == "train" else 0,
+            num_workers=os.cpu_count(),
         )
 
     train_dataloader = functools.partialmethod(_get_dataloader, "train")
     val_dataloader = functools.partialmethod(_get_dataloader, "val")
 
+    def test_dataloader(self):
+        # NOTE: mapping of "question_family_index" to query_*
+        # 0: query_size
+        # 1: query_color
+        # 2: query_material
+        # 3: query_shape
+        dataset = self.val_split
+        vocab = dataset.vocab
 
-class Subset(torch.utils.data.Subset):
-    def __getattr__(self, name):
-        return getattr(self.dataset, name)
+        index_groups = [[] for _ in range(4)]
+        for i, q in enumerate(dataset.questions):
+            index_groups[q["question_family_index"]].append(i)
+
+        def collate_fn(batch):
+            graphs, questions, targets = utils.collate_nsmitems(batch)
+            return (
+                graphs,
+                questions,
+                vocab.concept_embeddings,
+                vocab.property_embeddings,
+                targets,
+            )
+
+        return [
+            torch.utils.data.DataLoader(
+                Subset(dataset, indices),
+                batch_size=self.batch_size,
+                shuffle=False,
+                collate_fn=collate_fn,
+                num_workers=os.cpu_count(),
+            )
+            for indices in index_groups
+        ]
 
 
 class ExistClevrDataModule(pl.LightningDataModule):
@@ -578,7 +677,7 @@ class BalancedCountsClevrDataModule(pl.LightningDataModule):
         grouped_indices = collections.defaultdict(list)
         for i, question in enumerate(dataset.questions):
             grouped_indices[
-                (question["answer"], question["question_family_index"])
+                (question["question_family_index"], question["answer"])
             ].append(i)
 
         def collate_fn(batch):
@@ -592,7 +691,7 @@ class BalancedCountsClevrDataModule(pl.LightningDataModule):
             )
 
         dataloaders = []
-        for key in itertools.product(counts, nhops):
+        for key in itertools.product(nhops, counts):
             dataloaders.append(
                 torch.utils.data.DataLoader(
                     Subset(dataset, indices=grouped_indices[key]),
@@ -603,72 +702,3 @@ class BalancedCountsClevrDataModule(pl.LightningDataModule):
                 )
             )
         return dataloaders
-
-
-class GeneralizeCountsClevrDataModule(pl.LightningDataModule):
-    def __init__(self, datadir: str, batch_size: int) -> None:
-        super().__init__()
-        self.save_hyperparameters("batch_size")
-        self.datadir = datadir
-        self.batch_size = batch_size
-
-    def setup(self, stage):
-        questions_path = (
-            pathlib.Path(self.datadir)
-            / "custom-clevr"
-            / "count-only"
-            / "count_only_train_questions.json"
-        )
-        scenes_path = (
-            pathlib.Path(self.datadir)
-            / "clevr"
-            / "CLEVR_v1.0"
-            / "scenes"
-            / "CLEVR_train_scenes.json"
-        )
-        metadata_path = pathlib.Path(self.datadir) / "clevr" / "metadata.json"
-
-        if stage in ("fit", "validate", None):
-            self.val_split = CustomClevr(
-                questions_path,
-                scenes_path,
-                metadata_path,
-                postprocess_fn=functools.partial(
-                    balance_counts, allowed_counts=list(range(5, 11))
-                ),
-            )
-        if stage in ("fit", None):
-            self.train_split = CustomClevr(
-                questions_path,
-                scenes_path,
-                metadata_path,
-                postprocess_fn=functools.partial(
-                    balance_counts, allowed_counts=list(range(0, 5))
-                ),
-            )
-
-    def _get_dataloader(self, split):
-        dataset = getattr(self, f"{split}_split")
-        vocab = dataset.vocab
-
-        def collate_fn(batch):
-            graphs, questions, targets = utils.collate_nsmitems(batch)
-            return (
-                graphs,
-                questions,
-                vocab.concept_embeddings,
-                vocab.property_embeddings,
-                targets,
-                torch.empty(1),
-            )
-
-        return torch.utils.data.DataLoader(
-            dataset,
-            batch_size=self.batch_size,
-            shuffle=split == "train",
-            collate_fn=collate_fn,
-            num_workers=os.cpu_count(),
-        )
-
-    train_dataloader = functools.partialmethod(_get_dataloader, "train")
-    val_dataloader = functools.partialmethod(_get_dataloader, "val")
